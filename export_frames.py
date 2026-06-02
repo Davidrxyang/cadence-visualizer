@@ -3,7 +3,7 @@
 export_frames.py
 ----------------
 Reads a SQLite database of node location events and exports a compact
-.jsonl.gz file suitable for use in the movement visualizer artifact.
+.jsonl.gz file suitable for use in the movement visualizer.
 
 Usage:
     python export_frames.py --db path/to/your.db --out frames.jsonl.gz
@@ -22,7 +22,6 @@ import argparse
 import gzip
 import json
 import sqlite3
-import sys
 from collections import defaultdict
 
 
@@ -63,7 +62,6 @@ def export(
         if processed % 500_000 == 0:
             print(f"  ... {processed:,} / {total_rows:,} rows processed")
 
-    con.close()
     print(f"Done reading. {len(buckets):,} time buckets generated.")
 
     # --- compute coordinate bounds for the artifact ---
@@ -80,20 +78,38 @@ def export(
         ) + 1,
     }
 
+    # --- encounters (optional table) ---
+    encounters = []
+    try:
+        cur.execute("SELECT time, node1, node2, x, y, duration FROM encounters ORDER BY time")
+        for row in cur:
+            t, n1, n2, x, y, dur = row
+            encounters.append({
+                "__enc__": True,
+                "t": int(t), "n1": int(n1), "n2": int(n2),
+                "x": int(x), "y": int(y), "dur": int(dur)
+            })
+        print(f"Encounters loaded: {len(encounters):,}")
+    except Exception as e:
+        print(f"No encounters exported: {e}")
+
+    con.close()
+
     # --- write output ---
     print(f"Writing to {out_path} ...")
     opener = gzip.open if out_path.endswith(".gz") else open
     with opener(out_path, "wt", encoding="utf-8") as f:
-        # First line is the bounds metadata
         f.write(json.dumps({"__meta__": True, **bounds}) + "\n")
 
         for bucket_t in sorted(buckets.keys()):
             nodes = buckets[bucket_t]
-            # Encode nodes as flat [id, x, y, id, x, y, ...] for compactness
             flat = []
             for nid, (x, y) in nodes.items():
                 flat.extend([nid, x, y])
             f.write(json.dumps({"t": bucket_t, "n": flat}) + "\n")
+
+        for enc in encounters:
+            f.write(json.dumps(enc) + "\n")
 
     print(f"Export complete → {out_path}")
     print(f"Bounds: {bounds}")

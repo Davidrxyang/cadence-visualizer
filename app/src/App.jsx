@@ -7,12 +7,15 @@ function parseJSONL(text) {
   const lines = text.trim().split("\n");
   let meta = null;
   const frames = [];
+  const encounters = [];
 
   for (const line of lines) {
     if (!line.trim()) continue;
     const obj = JSON.parse(line);
     if (obj.__meta__) {
       meta = obj;
+    } else if (obj.__enc__) {
+      encounters.push({ t: obj.t, n1: obj.n1, n2: obj.n2, x: obj.x, y: obj.y, dur: obj.dur });
     } else {
       const nodes = {};
       const n = obj.n;
@@ -22,7 +25,7 @@ function parseJSONL(text) {
       frames.push({ t: obj.t, nodes });
     }
   }
-  return { meta, frames };
+  return { meta, frames, encounters };
 }
 
 function formatTime(unix) {
@@ -43,9 +46,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   const [selectedNodes, setSelectedNodes] = useState(new Set());
-  const [filterMode, setFilterMode] = useState("highlight"); // "highlight" | "isolate"
+  const [filterMode, setFilterMode] = useState("highlight");
   const [showPanel, setShowPanel] = useState(false);
   const [nodeSearch, setNodeSearch] = useState("");
+  const [showEncounters, setShowEncounters] = useState(true);
+  const [clickedNode, setClickedNode] = useState(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
   const canvasRef = useRef(null);
   const animRef = useRef(null);
@@ -61,6 +67,54 @@ export default function App() {
     if (!q) return allNodeIds;
     return allNodeIds.filter(id => String(id).includes(q));
   }, [allNodeIds, nodeSearch]);
+
+  // index encounters by node id for O(1) lookup per node
+  const encountersByNode = useMemo(() => {
+    if (!data?.encounters.length) return {};
+    const map = {};
+    for (const enc of data.encounters) {
+      (map[enc.n1] ??= []).push(enc);
+      (map[enc.n2] ??= []).push(enc);
+    }
+    return map;
+  }, [data]);
+
+  // frame indices that have an active encounter for any selected node (for timeline ticks)
+  const encounterTicks = useMemo(() => {
+    if (!data?.encounters.length || !selectedNodes.size) return new Set();
+    const { bucket } = data.meta;
+    const frameIdxMap = new Map(data.frames.map((f, i) => [f.t, i]));
+    const ticks = new Set();
+    for (const nodeId of selectedNodes) {
+      for (const enc of (encountersByNode[nodeId] ?? [])) {
+        const tStart = Math.floor(enc.t / bucket) * bucket;
+        for (let t = tStart; t < enc.t + enc.dur; t += bucket) {
+          const idx = frameIdxMap.get(t);
+          if (idx !== undefined) ticks.add(idx);
+        }
+      }
+    }
+    return ticks;
+  }, [data, selectedNodes, encountersByNode]);
+
+  // encounters active at the current frame for selected nodes
+  const currentEncounters = useMemo(() => {
+    if (!data?.encounters.length || !selectedNodes.size) return [];
+    const frameT = data.frames[frameIdx]?.t;
+    if (frameT == null) return [];
+    const seen = new Set();
+    const result = [];
+    for (const nodeId of selectedNodes) {
+      for (const enc of (encountersByNode[nodeId] ?? [])) {
+        if (frameT < enc.t || frameT >= enc.t + enc.dur) continue;
+        const key = `${enc.t}-${enc.n1}-${enc.n2}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(enc);
+      }
+    }
+    return result;
+  }, [data, frameIdx, selectedNodes, encountersByNode]);
 
   const handleFile = async (e) => {
     const file = e.target.files[0];
@@ -86,6 +140,7 @@ export default function App() {
       setFrameIdx(0);
       setPlaying(false);
       setSelectedNodes(new Set());
+      setClickedNode(null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -100,6 +155,33 @@ export default function App() {
       return next;
     });
   };
+
+  const handleCanvasClick = useCallback((e) => {
+    if (!data || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const { meta, frames } = data;
+    const W = canvas.width;
+    const H = canvas.height;
+    const toScreen = (x, y) => [
+      ((x - meta.x_min) / (meta.x_max - meta.x_min)) * (W - 40) + 20,
+      H - (((y - meta.y_min) / (meta.y_max - meta.y_min)) * (H - 40) + 20),
+    ];
+    const frame = frames[frameIdx];
+    let closest = null;
+    let closestDist = 10;
+    for (const [idStr, [x, y]] of Object.entries(frame.nodes)) {
+      const id = parseInt(idStr);
+      if (filterMode === "isolate" && selectedNodes.size > 0 && !selectedNodes.has(id)) continue;
+      const [sx, sy] = toScreen(x, y);
+      const d = Math.sqrt((sx - mx) ** 2 + (sy - my) ** 2);
+      if (d < closestDist) { closestDist = d; closest = id; }
+    }
+    setClickedNode(prev => prev === closest ? null : closest);
+    if (closest !== null) setTooltipPos({ x: e.clientX, y: e.clientY });
+  }, [data, frameIdx, filterMode, selectedNodes]);
 
   const draw = useCallback(() => {
     if (!data || !canvasRef.current) return;
@@ -148,7 +230,6 @@ export default function App() {
         for (const [idStr, [x, y]] of Object.entries(frame.nodes)) {
           const id = parseInt(idStr);
           const isSelected = selectedNodes.has(id);
-
           if (hasSelection && isSelected) {
             const [sx, sy] = toScreen(x, y);
             ctx.beginPath();
@@ -168,7 +249,7 @@ export default function App() {
       }
     }
 
-    // current frame — background nodes first, selected on top
+    // current frame nodes — background first, selected on top
     const frame = frames[frameIdx];
     const entries = Object.entries(frame.nodes);
 
@@ -200,7 +281,54 @@ export default function App() {
         ctx.stroke();
       }
     }
-  }, [data, frameIdx, showTrails, selectedNodes, filterMode]);
+
+    // encounters
+    if (showEncounters && hasSelection) {
+      const frameT = frames[frameIdx].t;
+      const drawn = new Set();
+      for (const nodeId of selectedNodes) {
+        for (const enc of (encountersByNode[nodeId] ?? [])) {
+          if (frameT < enc.t || frameT >= enc.t + enc.dur) continue;
+          const key = `${enc.t}-${enc.n1}-${enc.n2}`;
+          if (drawn.has(key)) continue;
+          drawn.add(key);
+
+          const [ex, ey] = toScreen(enc.x, enc.y);
+
+          // line connecting the two nodes (if both are in this frame)
+          const posA = frame.nodes[enc.n1];
+          const posB = frame.nodes[enc.n2];
+          if (posA && posB) {
+            const [ax, ay] = toScreen(posA[0], posA[1]);
+            const [bx, by] = toScreen(posB[0], posB[1]);
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+            ctx.strokeStyle = "rgba(251,191,36,0.4)";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+
+          // amber ring at encounter location
+          ctx.beginPath();
+          ctx.arc(ex, ey, 10, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(251,191,36,0.9)";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(ex, ey, 3, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(251,191,36,0.9)";
+          ctx.fill();
+
+          // label
+          ctx.font = "11px sans-serif";
+          ctx.fillStyle = "rgba(251,191,36,0.95)";
+          ctx.fillText(`${enc.n1}↔${enc.n2}`, ex + 14, ey + 4);
+        }
+      }
+    }
+  }, [data, frameIdx, showTrails, selectedNodes, filterMode, showEncounters, encountersByNode]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -238,6 +366,7 @@ export default function App() {
   }, [draw]);
 
   const nodeCount = data ? Object.keys(data.frames[frameIdx]?.nodes ?? {}).length : 0;
+  const hasEncounters = data?.encounters.length > 0;
 
   return (
     <div style={{ fontFamily: "var(--font-sans)", display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -310,7 +439,22 @@ export default function App() {
           </div>
 
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            <canvas ref={canvasRef} style={{ flex: 1, minWidth: 0, display: "block", background: "var(--color-background-primary)" }} />
+            <div
+              style={{ flex: 1, minWidth: 0, position: "relative" }}
+              onClick={handleCanvasClick}
+            >
+              <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", background: "var(--color-background-primary)" }} />
+              {clickedNode !== null && (
+                <div style={{
+                  position: "fixed", left: tooltipPos.x + 14, top: tooltipPos.y - 10,
+                  background: "rgba(0,0,0,0.75)", color: "#fff",
+                  padding: "3px 8px", borderRadius: 4, fontSize: 12,
+                  pointerEvents: "none", zIndex: 20, whiteSpace: "nowrap"
+                }}>
+                  Node {clickedNode}
+                </div>
+              )}
+            </div>
 
             {showPanel && (
               <div style={{
@@ -318,6 +462,7 @@ export default function App() {
                 display: "flex", flexDirection: "column", overflow: "hidden",
                 background: "var(--color-background-secondary)"
               }}>
+                {/* node controls */}
                 <div style={{ padding: "10px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)", display: "flex", flexDirection: "column", gap: 8 }}>
                   <input
                     type="text"
@@ -331,78 +476,81 @@ export default function App() {
                     }}
                   />
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => setFilterMode("highlight")}
-                      style={{
-                        flex: 1, padding: "4px 0", fontSize: 12, cursor: "pointer",
-                        border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-                        background: filterMode === "highlight" ? "#ef4444" : "var(--color-background-primary)",
-                        color: filterMode === "highlight" ? "#fff" : "var(--color-text-secondary)"
-                      }}
-                    >
-                      Highlight
-                    </button>
-                    <button
-                      onClick={() => setFilterMode("isolate")}
-                      style={{
-                        flex: 1, padding: "4px 0", fontSize: 12, cursor: "pointer",
-                        border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-                        background: filterMode === "isolate" ? "#ef4444" : "var(--color-background-primary)",
-                        color: filterMode === "isolate" ? "#fff" : "var(--color-text-secondary)"
-                      }}
-                    >
-                      Isolate
-                    </button>
+                    <button onClick={() => setFilterMode("highlight")} style={{
+                      flex: 1, padding: "4px 0", fontSize: 12, cursor: "pointer",
+                      border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                      background: filterMode === "highlight" ? "#ef4444" : "var(--color-background-primary)",
+                      color: filterMode === "highlight" ? "#fff" : "var(--color-text-secondary)"
+                    }}>Highlight</button>
+                    <button onClick={() => setFilterMode("isolate")} style={{
+                      flex: 1, padding: "4px 0", fontSize: 12, cursor: "pointer",
+                      border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                      background: filterMode === "isolate" ? "#ef4444" : "var(--color-background-primary)",
+                      color: filterMode === "isolate" ? "#fff" : "var(--color-text-secondary)"
+                    }}>Isolate</button>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => setSelectedNodes(new Set(filteredNodeIds))}
-                      style={{
-                        flex: 1, padding: "3px 0", fontSize: 11, cursor: "pointer",
-                        border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-                        background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
-                      }}
-                    >
-                      Select all
-                    </button>
-                    <button
-                      onClick={() => setSelectedNodes(new Set())}
-                      style={{
-                        flex: 1, padding: "3px 0", fontSize: 11, cursor: "pointer",
-                        border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-                        background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
-                      }}
-                    >
-                      Clear
-                    </button>
+                    <button onClick={() => setSelectedNodes(new Set(filteredNodeIds))} style={{
+                      flex: 1, padding: "3px 0", fontSize: 11, cursor: "pointer",
+                      border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                      background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
+                    }}>Select all</button>
+                    <button onClick={() => setSelectedNodes(new Set())} style={{
+                      flex: 1, padding: "3px 0", fontSize: 11, cursor: "pointer",
+                      border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                      background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
+                    }}>Clear</button>
                   </div>
                 </div>
 
+                {/* node list */}
                 <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
                   {filteredNodeIds.map(id => (
-                    <label
-                      key={id}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
-                        borderRadius: "var(--border-radius-md)", cursor: "pointer", fontSize: 13,
-                        background: selectedNodes.has(id) ? "rgba(239,68,68,0.12)" : "transparent",
-                        color: selectedNodes.has(id) ? "#ef4444" : "var(--color-text-secondary)"
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedNodes.has(id)}
-                        onChange={() => toggleNode(id)}
-                        style={{ accentColor: "#ef4444" }}
-                      />
+                    <label key={id} style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
+                      borderRadius: "var(--border-radius-md)", cursor: "pointer", fontSize: 13,
+                      background: selectedNodes.has(id) ? "rgba(239,68,68,0.12)" : "transparent",
+                      color: selectedNodes.has(id) ? "#ef4444" : "var(--color-text-secondary)"
+                    }}>
+                      <input type="checkbox" checked={selectedNodes.has(id)} onChange={() => toggleNode(id)} style={{ accentColor: "#ef4444" }} />
                       Node {id}
                     </label>
                   ))}
                 </div>
+
+                {/* encounters panel — only shown when nodes are selected and encounters exist */}
+                {selectedNodes.size > 0 && hasEncounters && (
+                  <div style={{ borderTop: "0.5px solid var(--color-border-tertiary)", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "rgba(251,191,36,0.9)" }}>Encounters</span>
+                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}>
+                        <input type="checkbox" checked={showEncounters} onChange={e => setShowEncounters(e.target.checked)} style={{ accentColor: "#fbbf24" }} />
+                        show
+                      </label>
+                    </div>
+                    {showEncounters && (
+                      currentEncounters.length > 0 ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          {currentEncounters.map((enc, i) => (
+                            <div key={i} style={{
+                              fontSize: 12, padding: "3px 6px", borderRadius: "var(--border-radius-md)",
+                              background: "rgba(251,191,36,0.1)", color: "rgba(251,191,36,0.9)"
+                            }}>
+                              {enc.n1} ↔ {enc.n2}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: 12, color: "var(--color-text-secondary)", opacity: 0.5 }}>none at this time</span>
+                      )
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
 
+          {/* timeline */}
           <div style={{
             padding: "10px 12px", borderTop: "0.5px solid var(--color-border-tertiary)",
             display: "flex", alignItems: "center", gap: 12
@@ -418,16 +566,39 @@ export default function App() {
             >
               {playing ? "⏸" : "▶"}
             </button>
-            <input
-              type="range"
-              min={0}
-              max={data.frames.length - 1}
-              step={1}
-              value={frameIdx}
-              onChange={e => { setPlaying(false); setFrameIdx(Number(e.target.value)); }}
-              style={{ flex: 1 }}
-              aria-label="Timeline scrubber"
-            />
+            <div style={{ flex: 1, position: "relative", display: "flex", flexDirection: "column", gap: 2 }}>
+              {/* encounter tick marks above the scrubber */}
+              {showEncounters && encounterTicks.size > 0 && (
+                <div style={{ position: "relative", height: 8 }}>
+                  {[...encounterTicks].map(idx => (
+                    <div
+                      key={idx}
+                      onClick={() => { setPlaying(false); setFrameIdx(idx); }}
+                      title={formatTime(data.frames[idx].t)}
+                      style={{
+                        position: "absolute",
+                        left: `${(idx / (data.frames.length - 1)) * 100}%`,
+                        top: 1, width: 6, height: 6,
+                        background: idx === frameIdx ? "rgba(251,191,36,1)" : "rgba(251,191,36,0.65)",
+                        transform: "translateX(-50%)",
+                        borderRadius: 1,
+                        cursor: "pointer",
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+              <input
+                type="range"
+                min={0}
+                max={data.frames.length - 1}
+                step={1}
+                value={frameIdx}
+                onChange={e => { setPlaying(false); setFrameIdx(Number(e.target.value)); }}
+                style={{ width: "100%" }}
+                aria-label="Timeline scrubber"
+              />
+            </div>
           </div>
         </>
       )}
