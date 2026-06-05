@@ -59,3 +59,31 @@ Immediately following the encounter, node 10 and node 103 continue moving and se
 ![Node 10](./images/node-10.png)
 
 ![Node 103](./images/node-103.png)
+
+## Progress
+
+- implemented node movement visualization
+- implemented encounter visualization
+- implemented basic GUI
+
+### TODO
+
+- message tracking 
+    - follow a message as it moves through the network
+    - follow its copies
+
+- algorithm behavior tracking
+    - node status tracking 
+        - node buffer status
+        - node mobility profile
+    - global status
+        - global mobility profile 
+
+- metrics
+    - real time delivery metrics, how many messages have been generated/delivered at this point in time?
+    - network congestion - how many messages/copies are present/dropped/etc in the current network?
+
+- control 
+    - customizable parameters
+        - ideally, I would like to avoid rerunning the simulator in real-time - naturally, I believe the best route is to pre-run several parameter combinations and allow the user to choose which experiment configuration to display results from. 
+
