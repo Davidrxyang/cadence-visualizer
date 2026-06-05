@@ -64,6 +64,20 @@ Immediately following the encounter, node 10 and node 103 continue moving and se
 
 ![Node 103](./images/node-103.png)
 
+## Technical Details
+
+The visualizer is split into two components: an offline export script and a browser-based renderer.
+
+Data export (export_frames.py) preprocesses the raw SQLite database into a compact .jsonl.gz file. Raw event data (one row per node per second) is bucketed into 30-second intervals, keeping the last known position per node per bucket. Node positions are encoded as flat [id, x, y, ...] integer arrays and written as one JSON line per time bucket. Encounter records are appended after all frame records. The output is gzip-compressed, reducing file size by ~70%. A metadata header line stores coordinate bounds and bucket size for the renderer to use.
+
+Renderer (app/) is a React + Vite single-page application. The browser decompresses the .jsonl.gz file using the native DecompressionStream API and parses the JSONL into a frame array and an encounter array held in memory.
+
+Rendering is done on an HTML5 canvas. On each frame change, the canvas is repainted in draw order: grid, motion trails, background nodes, selected nodes, encounter markers. A linear coordinate transform maps simulation units to canvas pixels, with a 20px margin and a Y-axis flip to account for canvas coordinates increasing downward.
+
+Encounters are pre-indexed into a node → encounter[] map at load time, making per-frame encounter lookups O(encounters per selected node) rather than O(all encounters). Timeline tick positions for encounters are precomputed into a Set<frameIndex> whenever the node selection changes.
+
+Hit-testing for node identification is performed manually on click: the click position is checked against every visible node in the current frame using Euclidean distance, returning the closest node within a 10-pixel radius.
+
 ## Progress
 
 - implemented node movement visualization
@@ -95,3 +109,6 @@ Immediately following the encounter, node 10 and node 103 continue moving and se
     - customizable parameters
         - ideally, I would like to avoid rerunning the simulator in real-time - naturally, I believe the best route is to pre-run several parameter combinations and allow the user to choose which experiment configuration to display results from. 
 
+- deployment
+    - deploy as a web application using some cloud service provider
+    - simple access through a web link
