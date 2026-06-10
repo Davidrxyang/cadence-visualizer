@@ -34,7 +34,6 @@ def export(
     col_x: str = "x",
     col_y: str = "y",
     bucket_seconds: int = 30,
-    experiment: str = "mirage",
 ):
     print(f"Connecting to {db_path} ...")
     con = sqlite3.connect(db_path)
@@ -94,30 +93,53 @@ def export(
     except Exception as e:
         print(f"No encounters exported: {e}")
 
-    # --- message transfers (filtered by experiment) ---
-    # Deduplicate: keep only the earliest transfer_time per (msg_id, receiver).
-    # A node becomes a carrier the first time it receives a message; re-transmissions are irrelevant.
-    msg_origins = {}  # msg_id -> origin record
-    first_recv = {}   # (msg_id, receiver) -> (earliest_t, sender)
+    # --- experiments (optional table) ---
+    experiment_records = []
     try:
-        print(f"Filtering message transfers by experiment LIKE '%{experiment}%' ...")
+        cur.execute("""
+            SELECT experiment_name, dataset_name, investigator, date_started, date_finished
+            FROM experiments
+            ORDER BY date_started
+        """)
+        for row in cur:
+            name, dataset, investigator, started, finished = row
+            experiment_records.append({
+                "__experiment__": True,
+                "name": str(name),
+                "dataset": str(dataset) if dataset else "",
+                "investigator": str(investigator) if investigator else "",
+                "started": str(started) if started else "",
+                "finished": str(finished) if finished else "",
+            })
+        print(f"Experiments loaded: {len(experiment_records):,}")
+    except Exception as e:
+        print(f"No experiments exported: {e}")
+
+    # --- message transfers (all experiments, tagged by experiment) ---
+    # Deduplicate: keep only the earliest transfer_time per (exp, msg_id, receiver).
+    # A node becomes a carrier the first time it receives a message; re-transmissions are irrelevant.
+    msg_origins = {}  # (exp, msg_id) -> origin record
+    first_recv = {}   # (exp, msg_id, receiver) -> (earliest_t, sender)
+    try:
         cur.execute("""
             SELECT message_id, sender_node, reciever_node, transfer_time,
-                   creation_time, destination, path
+                   creation_time, destination, path, experiment_name
             FROM message_dbs
-            WHERE experiment_name LIKE ?
-            ORDER BY transfer_time
-        """, (f"%{experiment}%",))
+            ORDER BY experiment_name, transfer_time
+        """)
         raw_count = 0
         for row in cur:
-            msg_id, sender, receiver, t_xfer, t_created, dest, path = row
+            msg_id, sender, receiver, t_xfer, t_created, dest, path, exp_name = row
             msg_id = str(msg_id)
+            exp_name = str(exp_name) if exp_name else ""
             raw_count += 1
-            if msg_id not in msg_origins and path:
+            origin_key = (exp_name, msg_id)
+            if origin_key not in msg_origins and path:
                 try:
                     origin_node = int(str(path).split(':')[0].strip())
-                    msg_origins[msg_id] = {
+                    msg_origins[origin_key] = {
                         "__msgorigin__": True,
+                        "exp": exp_name,
                         "id": msg_id,
                         "origin": origin_node,
                         "created": int(float(t_created)),
@@ -125,17 +147,17 @@ def export(
                     }
                 except (ValueError, IndexError):
                     pass
-            key = (msg_id, int(receiver))
+            key = (exp_name, msg_id, int(receiver))
             t = int(float(t_xfer))
             if key not in first_recv or t < first_recv[key][0]:
                 first_recv[key] = (t, int(sender))
 
         xfer_records = [
-            {"__xfer__": True, "id": mid, "t": t, "from": sndr, "to": recv}
-            for (mid, recv), (t, sndr) in first_recv.items()
+            {"__xfer__": True, "exp": exp, "id": mid, "t": t, "from": sndr, "to": recv}
+            for (exp, mid, recv), (t, sndr) in first_recv.items()
         ]
-        xfer_records.sort(key=lambda r: r["t"])
-        print(f"Message transfers: {raw_count:,} raw rows → {len(xfer_records):,} deduplicated across {len(msg_origins):,} messages")
+        xfer_records.sort(key=lambda r: (r["exp"], r["t"]))
+        print(f"Message transfers: {raw_count:,} raw rows → {len(xfer_records):,} deduplicated across {len(msg_origins):,} message-experiment pairs")
     except Exception as e:
         xfer_records = []
         print(f"No message transfers exported: {e}")
@@ -158,6 +180,9 @@ def export(
         for enc in encounters:
             f.write(json.dumps(enc) + "\n")
 
+        for exp in experiment_records:
+            f.write(json.dumps(exp) + "\n")
+
         for rec in msg_origins.values():
             f.write(json.dumps(rec) + "\n")
         for rec in xfer_records:
@@ -169,15 +194,14 @@ def export(
 
 def main():
     parser = argparse.ArgumentParser(description="Export SQLite events to JSONL frames.")
-    parser.add_argument("--db",         required=True,       help="Path to SQLite database file")
-    parser.add_argument("--out",        default="frames.jsonl.gz", help="Output file path (.jsonl or .jsonl.gz)")
-    parser.add_argument("--table",      default="events",    help="Table name (default: events)")
-    parser.add_argument("--col-time",   default="time",      help="Timestamp column name (default: time)")
-    parser.add_argument("--col-node",   default="node",      help="Node ID column name (default: node)")
-    parser.add_argument("--col-x",      default="x",         help="X coordinate column name (default: x)")
-    parser.add_argument("--col-y",      default="y",         help="Y coordinate column name (default: y)")
-    parser.add_argument("--bucket",     default=30, type=int,  help="Bucket size in seconds (default: 30)")
-    parser.add_argument("--experiment", default="mirage",      help="Experiment name filter (LIKE match, default: mirage)")
+    parser.add_argument("--db",       required=True,       help="Path to SQLite database file")
+    parser.add_argument("--out",      default="frames.jsonl.gz", help="Output file path (.jsonl or .jsonl.gz)")
+    parser.add_argument("--table",    default="events",    help="Table name (default: events)")
+    parser.add_argument("--col-time", default="time",      help="Timestamp column name (default: time)")
+    parser.add_argument("--col-node", default="node",      help="Node ID column name (default: node)")
+    parser.add_argument("--col-x",    default="x",         help="X coordinate column name (default: x)")
+    parser.add_argument("--col-y",    default="y",         help="Y coordinate column name (default: y)")
+    parser.add_argument("--bucket",   default=30, type=int, help="Bucket size in seconds (default: 30)")
     args = parser.parse_args()
 
     export(
@@ -189,7 +213,6 @@ def main():
         col_x=args.col_x,
         col_y=args.col_y,
         bucket_seconds=args.bucket,
-        experiment=args.experiment,
     )
 
 

@@ -7,20 +7,27 @@ function parseJSONL(text) {
   let meta = null;
   const frames = [];
   const encounters = [];
+  const experiments = [];
+  // nested: { exp_name: { msg_id: { origin, created, dest } } }
   const messageOrigins = {};
-  const transfersRaw = [];
+  // nested: { exp_name: { msg_id: [sorted xfer records] } }
+  const transfers = {};
 
   for (const line of lines) {
     if (!line.trim()) continue;
     const obj = JSON.parse(line);
     if (obj.__meta__) {
       meta = obj;
+    } else if (obj.__experiment__) {
+      experiments.push({ name: obj.name, dataset: obj.dataset, started: obj.started, finished: obj.finished });
     } else if (obj.__enc__) {
       encounters.push({ t: obj.t, n1: obj.n1, n2: obj.n2, x: obj.x, y: obj.y, dur: obj.dur });
     } else if (obj.__msgorigin__) {
-      messageOrigins[obj.id] = { origin: obj.origin, created: obj.created, dest: obj.dest };
+      const exp = obj.exp ?? "";
+      (messageOrigins[exp] ??= {})[obj.id] = { origin: obj.origin, created: obj.created, dest: obj.dest };
     } else if (obj.__xfer__) {
-      transfersRaw.push({ id: obj.id, t: obj.t, from: obj.from, to: obj.to });
+      const exp = obj.exp ?? "";
+      ((transfers[exp] ??= {})[obj.id] ??= []).push({ id: obj.id, t: obj.t, from: obj.from, to: obj.to });
     } else {
       const nodes = {};
       const n = obj.n;
@@ -31,12 +38,7 @@ function parseJSONL(text) {
     }
   }
 
-  const transfers = {};
-  for (const xfer of transfersRaw) {
-    (transfers[xfer.id] ??= []).push(xfer);
-  }
-
-  return { meta, frames, encounters, messageOrigins, transfers };
+  return { meta, frames, encounters, experiments, messageOrigins, transfers };
 }
 
 function formatTime(unix) {
@@ -47,6 +49,11 @@ function hueForNode(id, total) {
   return Math.round((id / Math.max(total, 1)) * 360);
 }
 
+function formatDateShort(str) {
+  if (!str) return "";
+  return str.slice(0, 16).replace("T", " ");
+}
+
 export default function App() {
   const [data, setData] = useState(null);
   const [frameIdx, setFrameIdx] = useState(0);
@@ -54,6 +61,10 @@ export default function App() {
   const [speed, setSpeed] = useState(5);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // null = picker not yet shown; "" = no experiments (auto); string = chosen
+  const [selectedExperiment, setSelectedExperiment] = useState(null);
+  const [expSearch, setExpSearch] = useState("");
 
   const [selectedNodes, setSelectedNodes] = useState(new Set());
   const [filterMode, setFilterMode] = useState("highlight");
@@ -85,10 +96,29 @@ export default function App() {
     return allNodeIds.filter(id => String(id).includes(q));
   }, [allNodeIds, nodeSearch]);
 
+  const filteredExperiments = useMemo(() => {
+    if (!data) return [];
+    const q = expSearch.trim().toLowerCase();
+    if (!q) return data.experiments;
+    return data.experiments.filter(e =>
+      e.name.toLowerCase().includes(q) || (e.dataset ?? "").toLowerCase().includes(q)
+    );
+  }, [data, expSearch]);
+
+  // message origins and transfers scoped to the selected experiment
+  const expMessageOrigins = useMemo(() => {
+    if (!data || selectedExperiment === null) return {};
+    return data.messageOrigins[selectedExperiment] ?? {};
+  }, [data, selectedExperiment]);
+
+  const expTransfers = useMemo(() => {
+    if (!data || selectedExperiment === null) return {};
+    return data.transfers[selectedExperiment] ?? {};
+  }, [data, selectedExperiment]);
+
   const allMessageIds = useMemo(() => {
-    if (!data?.transfers) return [];
-    return Object.keys(data.transfers).sort((a, b) => Number(a) - Number(b));
-  }, [data]);
+    return Object.keys(expMessageOrigins).sort((a, b) => Number(a) - Number(b));
+  }, [expMessageOrigins]);
 
   const filteredMessageIds = useMemo(() => {
     const q = msgSearch.trim();
@@ -149,40 +179,40 @@ export default function App() {
     if (!selectedMessage || !data) return new Set();
     const frameT = data.frames[frameIdx]?.t;
     if (frameT == null) return new Set();
-    const origin = data.messageOrigins[selectedMessage]?.origin;
+    const origin = expMessageOrigins[selectedMessage]?.origin;
     const result = new Set(origin != null ? [origin] : []);
-    for (const xfer of (data.transfers[selectedMessage] ?? [])) {
+    for (const xfer of (expTransfers[selectedMessage] ?? [])) {
       if (xfer.t > frameT) break;
       result.add(xfer.to);
     }
     return result;
-  }, [selectedMessage, frameIdx, data]);
+  }, [selectedMessage, frameIdx, data, expMessageOrigins, expTransfers]);
 
   const transferTicks = useMemo(() => {
-    if (!selectedMessage || !data?.transfers[selectedMessage]) return new Set();
+    if (!selectedMessage || !expTransfers[selectedMessage]) return new Set();
     const { bucket } = data.meta;
     const ticks = new Set();
-    for (const xfer of data.transfers[selectedMessage]) {
+    for (const xfer of expTransfers[selectedMessage]) {
       const bucketed = Math.floor(xfer.t / bucket) * bucket;
       const idx = frameIdxMap.get(bucketed);
       if (idx !== undefined) ticks.add(idx);
     }
     return ticks;
-  }, [selectedMessage, data, frameIdxMap]);
+  }, [selectedMessage, data, expTransfers, frameIdxMap]);
 
   const deliveryFrameIdx = useMemo(() => {
     if (!selectedMessage || !data) return null;
-    const dest = data.messageOrigins[selectedMessage]?.dest;
+    const dest = expMessageOrigins[selectedMessage]?.dest;
     if (dest == null) return null;
     const { bucket } = data.meta;
-    for (const xfer of (data.transfers[selectedMessage] ?? [])) {
+    for (const xfer of (expTransfers[selectedMessage] ?? [])) {
       if (xfer.to === dest) {
         const bucketed = Math.floor(xfer.t / bucket) * bucket;
         return frameIdxMap.get(bucketed) ?? null;
       }
     }
     return null;
-  }, [selectedMessage, data, frameIdxMap]);
+  }, [selectedMessage, data, expMessageOrigins, expTransfers, frameIdxMap]);
 
   // ── file loading ──────────────────────────────────────────────────────────
 
@@ -212,11 +242,19 @@ export default function App() {
       setSelectedNodes(new Set());
       setSelectedMessage(null);
       setClickedNode(null);
+      setExpSearch("");
+      setSelectedExperiment(parsed.experiments.length === 0 ? "" : null);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const chooseExperiment = (name) => {
+    setSelectedExperiment(name);
+    setSelectedMessage(null);
+    setExpSearch("");
   };
 
   const toggleNode = (id) => {
@@ -313,7 +351,7 @@ export default function App() {
 
     // pass 2: carrier nodes (blue / green for destination)
     if (hasMessage) {
-      const msgInfo = data.messageOrigins[selectedMessage];
+      const msgInfo = expMessageOrigins[selectedMessage];
       for (const [idStr, [x, y]] of entries) {
         const id = parseInt(idStr);
         if (selectedNodes.has(id)) continue;
@@ -388,7 +426,7 @@ export default function App() {
     if (hasMessage) {
       const frameT = frames[frameIdx].t;
       const { bucket } = meta;
-      for (const xfer of (data.transfers[selectedMessage] ?? [])) {
+      for (const xfer of (expTransfers[selectedMessage] ?? [])) {
         const xferBucket = Math.floor(xfer.t / bucket) * bucket;
         if (xferBucket < frameT) continue;
         if (xferBucket > frameT) break;
@@ -410,7 +448,7 @@ export default function App() {
       }
     }
   }, [data, frameIdx, selectedNodes, filterMode, showEncounters,
-      encountersByNode, selectedMessage, carriers]);
+      encountersByNode, selectedMessage, carriers, expMessageOrigins, expTransfers]);
 
   // ── effects ───────────────────────────────────────────────────────────────
 
@@ -462,14 +500,19 @@ export default function App() {
 
   const nodeCount = data ? Object.keys(data.frames[frameIdx]?.nodes ?? {}).length : 0;
   const hasEncounters = data?.encounters.length > 0;
-  const hasMessages = data && allMessageIds.length > 0;
-  const msgInfo = selectedMessage ? data.messageOrigins[selectedMessage] : null;
+  const hasMessages = selectedExperiment !== null && allMessageIds.length > 0;
+  const msgInfo = selectedMessage ? expMessageOrigins[selectedMessage] : null;
   const delivered = msgInfo && carriers.has(msgInfo.dest);
+
+  const showPicker = data && selectedExperiment === null && data.experiments.length > 0;
+  const showVisualizer = data && selectedExperiment !== null;
 
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
     <div style={{ fontFamily: "var(--font-sans)", display: "flex", flexDirection: "column", height: "100vh" }}>
+
+      {/* ── STEP 1: no file loaded ── */}
       {!data && (
         <div style={{
           flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
@@ -490,13 +533,98 @@ export default function App() {
         </div>
       )}
 
-      {data && (
+      {/* ── STEP 2: experiment picker ── */}
+      {showPicker && (
+        <div style={{
+          flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          gap: 20, background: "var(--color-background-secondary)", padding: 32
+        }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, width: "100%", maxWidth: 560 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text-primary)" }}>
+                Select an experiment
+              </span>
+              <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+                {data.experiments.length} available
+              </span>
+            </div>
+            <input
+              type="text"
+              placeholder="Search by name or dataset…"
+              value={expSearch}
+              onChange={e => setExpSearch(e.target.value)}
+              autoFocus
+              style={{
+                padding: "7px 10px", fontSize: 13, borderRadius: "var(--border-radius-md)",
+                border: "0.5px solid var(--color-border-secondary)",
+                background: "var(--color-background-primary)", color: "var(--color-text-primary)",
+                outline: "none"
+              }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: "60vh", overflowY: "auto" }}>
+              {filteredExperiments.map(exp => (
+                <div
+                  key={exp.name}
+                  onClick={() => chooseExperiment(exp.name)}
+                  style={{
+                    padding: "10px 14px", borderRadius: "var(--border-radius-md)", cursor: "pointer",
+                    border: "0.5px solid var(--color-border-secondary)",
+                    background: "var(--color-background-primary)",
+                    display: "flex", flexDirection: "column", gap: 3
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = "var(--color-border-secondary)"}
+                >
+                  <span style={{ fontSize: 13, color: "var(--color-text-primary)", fontWeight: 500 }}>
+                    {exp.name}
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                    {exp.dataset}{exp.started ? ` · ${formatDateShort(exp.started)}` : ""}
+                  </span>
+                </div>
+              ))}
+              {filteredExperiments.length === 0 && (
+                <span style={{ fontSize: 13, color: "var(--color-text-secondary)", textAlign: "center", padding: 16 }}>
+                  No experiments match
+                </span>
+              )}
+            </div>
+            <div style={{ borderTop: "0.5px solid var(--color-border-tertiary)", paddingTop: 12, display: "flex", justifyContent: "flex-end" }}>
+              <label style={{
+                cursor: "pointer", fontSize: 12, padding: "4px 10px",
+                border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
+              }}>
+                Load different file
+                <input type="file" accept=".jsonl,.gz" onChange={handleFile} style={{ display: "none" }} />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 3: visualizer ── */}
+      {showVisualizer && (
         <>
           {/* header */}
           <div style={{
             display: "flex", alignItems: "center", gap: 12, padding: "8px 12px",
             borderBottom: "0.5px solid var(--color-border-tertiary)", flexWrap: "wrap"
           }}>
+            {selectedExperiment && (
+              <button
+                onClick={() => { setSelectedExperiment(null); setSelectedMessage(null); }}
+                title="Change experiment"
+                style={{
+                  padding: "3px 8px", fontSize: 12, cursor: "pointer", flexShrink: 0,
+                  border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+                  background: "var(--color-background-secondary)", color: "var(--color-text-secondary)",
+                  maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+                }}
+              >
+                ← {selectedExperiment}
+              </button>
+            )}
             <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
               {formatTime(data.frames[frameIdx].t)}
             </span>
@@ -681,7 +809,7 @@ export default function App() {
 
                     <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
                       {filteredMessageIds.map(id => {
-                        const info = data.messageOrigins[id];
+                        const info = expMessageOrigins[id];
                         return (
                           <div
                             key={id}
@@ -773,10 +901,7 @@ export default function App() {
                       top: "50%", transform: "translate(-50%, -50%)",
                       width: 3, height: 18,
                       background: deliveryFrameIdx === frameIdx ? "#22c55e" : "rgba(34,197,94,0.85)",
-                      borderRadius: 2,
-                      cursor: "pointer",
-                      pointerEvents: "all",
-                      zIndex: 2,
+                      borderRadius: 2, cursor: "pointer", pointerEvents: "all", zIndex: 2,
                     }}
                   />
                 )}
