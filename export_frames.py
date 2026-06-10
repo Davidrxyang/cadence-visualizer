@@ -34,6 +34,7 @@ def export(
     col_x: str = "x",
     col_y: str = "y",
     bucket_seconds: int = 30,
+    experiment: str = "mirage",
 ):
     print(f"Connecting to {db_path} ...")
     con = sqlite3.connect(db_path)
@@ -93,6 +94,52 @@ def export(
     except Exception as e:
         print(f"No encounters exported: {e}")
 
+    # --- message transfers (filtered by experiment) ---
+    # Deduplicate: keep only the earliest transfer_time per (msg_id, receiver).
+    # A node becomes a carrier the first time it receives a message; re-transmissions are irrelevant.
+    msg_origins = {}  # msg_id -> origin record
+    first_recv = {}   # (msg_id, receiver) -> (earliest_t, sender)
+    try:
+        print(f"Filtering message transfers by experiment LIKE '%{experiment}%' ...")
+        cur.execute("""
+            SELECT message_id, sender_node, reciever_node, transfer_time,
+                   creation_time, destination, path
+            FROM message_dbs
+            WHERE experiment_name LIKE ?
+            ORDER BY transfer_time
+        """, (f"%{experiment}%",))
+        raw_count = 0
+        for row in cur:
+            msg_id, sender, receiver, t_xfer, t_created, dest, path = row
+            msg_id = str(msg_id)
+            raw_count += 1
+            if msg_id not in msg_origins and path:
+                try:
+                    origin_node = int(str(path).split(':')[0].strip())
+                    msg_origins[msg_id] = {
+                        "__msgorigin__": True,
+                        "id": msg_id,
+                        "origin": origin_node,
+                        "created": int(float(t_created)),
+                        "dest": int(float(dest)),
+                    }
+                except (ValueError, IndexError):
+                    pass
+            key = (msg_id, int(receiver))
+            t = int(float(t_xfer))
+            if key not in first_recv or t < first_recv[key][0]:
+                first_recv[key] = (t, int(sender))
+
+        xfer_records = [
+            {"__xfer__": True, "id": mid, "t": t, "from": sndr, "to": recv}
+            for (mid, recv), (t, sndr) in first_recv.items()
+        ]
+        xfer_records.sort(key=lambda r: r["t"])
+        print(f"Message transfers: {raw_count:,} raw rows → {len(xfer_records):,} deduplicated across {len(msg_origins):,} messages")
+    except Exception as e:
+        xfer_records = []
+        print(f"No message transfers exported: {e}")
+
     con.close()
 
     # --- write output ---
@@ -111,6 +158,11 @@ def export(
         for enc in encounters:
             f.write(json.dumps(enc) + "\n")
 
+        for rec in msg_origins.values():
+            f.write(json.dumps(rec) + "\n")
+        for rec in xfer_records:
+            f.write(json.dumps(rec) + "\n")
+
     print(f"Export complete → {out_path}")
     print(f"Bounds: {bounds}")
 
@@ -124,7 +176,8 @@ def main():
     parser.add_argument("--col-node",   default="node",      help="Node ID column name (default: node)")
     parser.add_argument("--col-x",      default="x",         help="X coordinate column name (default: x)")
     parser.add_argument("--col-y",      default="y",         help="Y coordinate column name (default: y)")
-    parser.add_argument("--bucket",     default=30, type=int,help="Bucket size in seconds (default: 30)")
+    parser.add_argument("--bucket",     default=30, type=int,  help="Bucket size in seconds (default: 30)")
+    parser.add_argument("--experiment", default="mirage",      help="Experiment name filter (LIKE match, default: mirage)")
     args = parser.parse_args()
 
     export(
@@ -136,6 +189,7 @@ def main():
         col_x=args.col_x,
         col_y=args.col_y,
         bucket_seconds=args.bucket,
+        experiment=args.experiment,
     )
 
 
