@@ -178,7 +178,17 @@ export default function App() {
     for (const xfer of (data.transfers[selectedMessage] ?? [])) {
       if (xfer.to === dest) {
         const bucketed = Math.floor(xfer.t / bucket) * bucket;
-        return frameIdxMap.get(bucketed) ?? null;
+        const exact = frameIdxMap.get(bucketed);
+        if (exact !== undefined) return exact;
+        // no frame at that exact bucket — binary search for nearest frame before delivery
+        const frames = data.frames;
+        let lo = 0, hi = frames.length - 1, best = 0;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (frames[mid].t <= bucketed) { best = mid; lo = mid + 1; }
+          else hi = mid - 1;
+        }
+        return best;
       }
     }
     return null;
