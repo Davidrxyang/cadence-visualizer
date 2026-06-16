@@ -30,6 +30,23 @@ const NODE_COLOR_PALETTE = Array.from({ length: MAX_SELECTED_NODES }, (_, i) =>
   hslToHex(vanDerCorput(i) * 360, 75, 58)
 );
 
+// Reserved color for message carriers that aren't part of the selected-node set.
+// Pure black sits maximally distinct from the saturated hues in NODE_COLOR_PALETTE.
+const CARRIER_RESERVED_COLOR = "#000000";
+
+function drawTriangle(ctx, cx, cy, r, fillColor, strokeColor, lineWidth) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.lineTo(cx + r * Math.sin((2 * Math.PI) / 3), cy - r * Math.cos((2 * Math.PI) / 3));
+  ctx.lineTo(cx + r * Math.sin((4 * Math.PI) / 3), cy - r * Math.cos((4 * Math.PI) / 3));
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+}
+
 function parseJSONL(text) {
   const lines = text.trim().split("\n");
   let meta = null;
@@ -379,41 +396,45 @@ export default function App() {
       ctx.fillStyle = color; ctx.fill();
     }
 
-    // pass 2: carrier nodes (blue / green for destination)
+    // pass 2: message carriers — always triangles with a white border.
+    // Selected carriers keep their custom node color; everyone else gets the reserved black.
     if (hasMessage) {
       const msgInfo = data.messageOrigins[selectedMessage];
       for (const [idStr, [x, y]] of entries) {
         const id = parseInt(idStr);
-        if (selectedNodes.has(id)) continue;
         if (!carriers.has(id)) continue;
         const [sx, sy] = toScreen(x, y);
+        const isSelected = selectedNodes.has(id);
+        const isOrigin = msgInfo?.origin === id;
         const isDelivered = msgInfo?.dest === id;
+        const fillColor = isSelected ? (nodeColors[id] ?? "#ef4444") : CARRIER_RESERVED_COLOR;
+        const r = NODE_RADIUS * 2.4;
+
         if (isDelivered) {
           ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 4.5, 0, Math.PI * 2);
-          ctx.fillStyle = "rgba(34,197,94,0.15)"; ctx.fill();
-          ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 3, 0, Math.PI * 2);
-          ctx.fillStyle = "#22c55e"; ctx.fill();
-          ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 3, 0, Math.PI * 2);
-          ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 2; ctx.stroke();
+          ctx.fillStyle = "rgba(34,197,94,0.18)"; ctx.fill();
+        }
+
+        drawTriangle(ctx, sx, sy, r, fillColor, "rgba(255,255,255,0.95)", 2.5);
+
+        if (isDelivered) {
           ctx.font = "bold 11px sans-serif";
           ctx.fillStyle = "#22c55e";
-          ctx.fillText("✓ dest", sx + NODE_RADIUS * 3 + 4, sy + 4);
-        } else {
-          ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 1.6, 0, Math.PI * 2);
-          ctx.fillStyle = "#3b82f6"; ctx.fill();
-          if (msgInfo?.origin === id) {
-            ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 1.6, 0, Math.PI * 2);
-            ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.5; ctx.stroke();
-          }
+          ctx.fillText("✓ dest", sx + r + 4, sy + 4);
+        } else if (isOrigin) {
+          ctx.font = "11px sans-serif";
+          ctx.fillStyle = "rgba(255,255,255,0.85)";
+          ctx.fillText("origin", sx + r + 4, sy + 4);
         }
       }
     }
 
-    // pass 3: selected nodes (per-node custom color)
+    // pass 3: selected nodes (per-node custom color) — carriers already drawn as triangles above
     if (hasSelection) {
       for (const [idStr, [x, y]] of entries) {
         const id = parseInt(idStr);
         if (!selectedNodes.has(id)) continue;
+        if (hasMessage && carriers.has(id)) continue;
         const [sx, sy] = toScreen(x, y);
         ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 2, 0, Math.PI * 2);
         ctx.fillStyle = nodeColors[id] ?? "#ef4444"; ctx.fill();
