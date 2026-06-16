@@ -1,6 +1,34 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const NODE_RADIUS = 3;
+const MAX_SELECTED_NODES = 20;
+
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = (x) => Math.round(255 * x).toString(16).padStart(2, "0");
+  return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+}
+
+// Van der Corput sequence: at every prefix length, the hues are spread as far
+// apart as possible (e.g. 0°, 180°, 90°, 270°, 45°, 225°, ...). Colors only
+// start crowding together once many nodes are selected.
+function vanDerCorput(n, base = 2) {
+  let vdc = 0;
+  let denom = 1;
+  while (n > 0) {
+    denom *= base;
+    vdc += (n % base) / denom;
+    n = Math.floor(n / base);
+  }
+  return vdc;
+}
+
+const NODE_COLOR_PALETTE = Array.from({ length: MAX_SELECTED_NODES }, (_, i) =>
+  hslToHex(vanDerCorput(i) * 360, 75, 58)
+);
 
 function parseJSONL(text) {
   const lines = text.trim().split("\n");
@@ -57,6 +85,7 @@ export default function App() {
   const [fileName, setFileName] = useState(null);
 
   const [selectedNodes, setSelectedNodes] = useState(new Set());
+  const [nodeColors, setNodeColors] = useState({});
   const [filterMode, setFilterMode] = useState("highlight");
   const [showPanel, setShowPanel] = useState(false);
   const [sidebarTab, setSidebarTab] = useState("nodes");
@@ -232,11 +261,38 @@ export default function App() {
   };
 
   const toggleNode = (id) => {
-    setSelectedNodes(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+    if (selectedNodes.has(id)) {
+      const next = new Set(selectedNodes);
+      next.delete(id);
+      setSelectedNodes(next);
+      return;
+    }
+    if (selectedNodes.size >= MAX_SELECTED_NODES) return;
+    const next = new Set(selectedNodes);
+    next.add(id);
+    setSelectedNodes(next);
+    if (!nodeColors[id]) {
+      setNodeColors(prev => ({ ...prev, [id]: NODE_COLOR_PALETTE[(next.size - 1) % NODE_COLOR_PALETTE.length] }));
+    }
+  };
+
+  const setNodeColor = (id, color) => {
+    setNodeColors(prev => ({ ...prev, [id]: color }));
+  };
+
+  const selectAllNodes = () => {
+    const ids = filteredNodeIds.slice(0, MAX_SELECTED_NODES);
+    setSelectedNodes(new Set(ids));
+    setNodeColors(prev => {
+      const next = { ...prev };
+      ids.forEach((id, i) => { if (!next[id]) next[id] = NODE_COLOR_PALETTE[i % NODE_COLOR_PALETTE.length]; });
       return next;
     });
+  };
+
+  const clearNodes = () => {
+    setSelectedNodes(new Set());
+    setNodeColors({});
   };
 
   // ── canvas click ──────────────────────────────────────────────────────────
@@ -353,14 +409,14 @@ export default function App() {
       }
     }
 
-    // pass 3: selected nodes (red)
+    // pass 3: selected nodes (per-node custom color)
     if (hasSelection) {
       for (const [idStr, [x, y]] of entries) {
         const id = parseInt(idStr);
         if (!selectedNodes.has(id)) continue;
         const [sx, sy] = toScreen(x, y);
         ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 2, 0, Math.PI * 2);
-        ctx.fillStyle = "#ef4444"; ctx.fill();
+        ctx.fillStyle = nodeColors[id] ?? "#ef4444"; ctx.fill();
         ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 2, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.5; ctx.stroke();
       }
@@ -421,7 +477,7 @@ export default function App() {
         ctx.fillText(`${xfer.from}→${xfer.to}`, mx2 + 12, my2 + 4);
       }
     }
-  }, [data, frameIdx, selectedNodes, filterMode, showEncounters,
+  }, [data, frameIdx, selectedNodes, nodeColors, filterMode, showEncounters,
       encountersByNode, selectedMessage, carriers]);
 
   // ── effects ───────────────────────────────────────────────────────────────
@@ -611,31 +667,54 @@ export default function App() {
                         }}>Isolate</button>
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => setSelectedNodes(new Set(filteredNodeIds))} style={{
+                        <button onClick={selectAllNodes} style={{
                           flex: 1, padding: "3px 0", fontSize: 11, cursor: "pointer",
                           border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
                           background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
                         }}>Select all</button>
-                        <button onClick={() => setSelectedNodes(new Set())} style={{
+                        <button onClick={clearNodes} style={{
                           flex: 1, padding: "3px 0", fontSize: 11, cursor: "pointer",
                           border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
                           background: "var(--color-background-primary)", color: "var(--color-text-secondary)"
                         }}>Clear</button>
                       </div>
+                      <span style={{ fontSize: 11, color: "var(--color-text-secondary)", opacity: 0.6 }}>
+                        {selectedNodes.size}/{MAX_SELECTED_NODES} selected
+                      </span>
                     </div>
 
                     <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-                      {filteredNodeIds.map(id => (
-                        <label key={id} style={{
-                          display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
-                          borderRadius: "var(--border-radius-md)", cursor: "pointer", fontSize: 13,
-                          background: selectedNodes.has(id) ? "rgba(239,68,68,0.12)" : "transparent",
-                          color: selectedNodes.has(id) ? "#ef4444" : "var(--color-text-secondary)"
-                        }}>
-                          <input type="checkbox" checked={selectedNodes.has(id)} onChange={() => toggleNode(id)} style={{ accentColor: "#ef4444" }} />
-                          Node {id}
-                        </label>
-                      ))}
+                      {filteredNodeIds.map(id => {
+                        const isSelected = selectedNodes.has(id);
+                        const color = nodeColors[id] ?? "#ef4444";
+                        return (
+                          <label key={id} style={{
+                            display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
+                            borderRadius: "var(--border-radius-md)", cursor: "pointer", fontSize: 13,
+                            background: isSelected ? `${color}1f` : "transparent",
+                            color: isSelected ? color : "var(--color-text-secondary)"
+                          }}>
+                            <input
+                              type="checkbox" checked={isSelected} onChange={() => toggleNode(id)}
+                              disabled={!isSelected && selectedNodes.size >= MAX_SELECTED_NODES}
+                              style={{ accentColor: color }}
+                            />
+                            {isSelected && (
+                              <input
+                                type="color" value={color}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => setNodeColor(id, e.target.value)}
+                                title="Change color"
+                                style={{
+                                  width: 14, height: 14, padding: 0, border: "none",
+                                  borderRadius: 2, cursor: "pointer", background: "none", flexShrink: 0
+                                }}
+                              />
+                            )}
+                            Node {id}
+                          </label>
+                        );
+                      })}
                     </div>
 
                     {selectedNodes.size > 0 && hasEncounters && (
