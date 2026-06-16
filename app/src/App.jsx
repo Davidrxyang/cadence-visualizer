@@ -54,6 +54,7 @@ export default function App() {
   const [speed, setSpeed] = useState(5);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [fileName, setFileName] = useState(null);
 
   const [selectedNodes, setSelectedNodes] = useState(new Set());
   const [filterMode, setFilterMode] = useState("highlight");
@@ -217,6 +218,7 @@ export default function App() {
       const parsed = parseJSONL(text);
       if (!parsed.frames.length) throw new Error("No frames found in file.");
       setData(parsed);
+      setFileName(file.name);
       setFrameIdx(0);
       setPlaying(false);
       setSelectedNodes(new Set());
@@ -507,6 +509,14 @@ export default function App() {
             display: "flex", alignItems: "center", gap: 12, padding: "8px 12px",
             borderBottom: "0.5px solid var(--color-border-tertiary)", flexWrap: "wrap"
           }}>
+            {fileName && (
+              <span style={{
+                fontSize: 13, color: "var(--color-text-primary)", fontWeight: 500,
+                maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+              }} title={fileName}>
+                {fileName}
+              </span>
+            )}
             <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>
               {formatTime(data.frames[frameIdx].t)}
             </span>
