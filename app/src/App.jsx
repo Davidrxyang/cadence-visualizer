@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
-const NODE_RADIUS = 3;
+const DEFAULT_NODE_RADIUS = 3;
 const MAX_SELECTED_NODES = 20;
 
 function hslToHex(h, s, l) {
@@ -97,6 +97,7 @@ export default function App() {
   const [frameIdx, setFrameIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(5);
+  const [nodeSize, setNodeSize] = useState(DEFAULT_NODE_RADIUS);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState(null);
@@ -392,7 +393,7 @@ export default function App() {
       const color = bgColor(id);
       if (!color) continue;
       const [sx, sy] = toScreen(x, y);
-      ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(sx, sy, nodeSize, 0, Math.PI * 2);
       ctx.fillStyle = color; ctx.fill();
     }
 
@@ -408,10 +409,10 @@ export default function App() {
         const isOrigin = msgInfo?.origin === id;
         const isDelivered = msgInfo?.dest === id;
         const fillColor = isSelected ? (nodeColors[id] ?? "#ef4444") : CARRIER_RESERVED_COLOR;
-        const r = NODE_RADIUS * 2.4;
+        const r = nodeSize * 2.4;
 
         if (isDelivered) {
-          ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 4.5, 0, Math.PI * 2);
+          ctx.beginPath(); ctx.arc(sx, sy, nodeSize * 4.5, 0, Math.PI * 2);
           ctx.fillStyle = "rgba(34,197,94,0.18)"; ctx.fill();
         }
 
@@ -436,9 +437,9 @@ export default function App() {
         if (!selectedNodes.has(id)) continue;
         if (hasMessage && carriers.has(id)) continue;
         const [sx, sy] = toScreen(x, y);
-        ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 2, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(sx, sy, nodeSize * 2, 0, Math.PI * 2);
         ctx.fillStyle = nodeColors[id] ?? "#ef4444"; ctx.fill();
-        ctx.beginPath(); ctx.arc(sx, sy, NODE_RADIUS * 2, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(sx, sy, nodeSize * 2, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.5; ctx.stroke();
       }
     }
@@ -498,7 +499,7 @@ export default function App() {
         ctx.fillText(`${xfer.from}→${xfer.to}`, mx2 + 12, my2 + 4);
       }
     }
-  }, [data, frameIdx, selectedNodes, nodeColors, filterMode, showEncounters,
+  }, [data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode, showEncounters,
       encountersByNode, selectedMessage, carriers]);
 
   // ── effects ───────────────────────────────────────────────────────────────
@@ -604,6 +605,12 @@ export default function App() {
               {frameIdx + 1} / {data.frames.length}
             </span>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)", marginLeft: "auto" }}>
+              size
+              <input type="range" min="1" max="10" step="0.5" value={nodeSize}
+                onChange={e => setNodeSize(Number(e.target.value))} style={{ width: 70 }} />
+              <span style={{ minWidth: 22 }}>{nodeSize}px</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)" }}>
               speed
               <input type="range" min="1" max="60" step="1" value={speed}
                 onChange={e => setSpeed(Number(e.target.value))} style={{ width: 80 }} />
