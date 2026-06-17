@@ -145,6 +145,7 @@ export default function App() {
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [msgSearch, setMsgSearch] = useState("");
   const [onlyDelivered, setOnlyDelivered] = useState(false);
+  const [hideCarriers, setHideCarriers] = useState(false);
 
   const [clickedNode, setClickedNode] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -433,9 +434,12 @@ export default function App() {
     const total = meta.node_count;
     const hasSelection = selectedNodes.size > 0;
     const hasMessage = !!selectedMessage && carriers.size > 0;
+    // A carrier is drawn as a triangle unless hideCarriers is on AND it's not part of the
+    // selected-node set — i.e. hiding only ever applies to non-selected carriers.
+    const carrierVisible = (id) => hasMessage && carriers.has(id) && (selectedNodes.has(id) || !hideCarriers);
 
     const bgColor = (id) => {
-      if (hasSelection && filterMode === "isolate" && !carriers.has(id)) return null;
+      if (hasSelection && filterMode === "isolate") return null;
       if (hasMessage) return "rgba(80,80,80,0.35)";
       const hue = hueForNode(id, total);
       if (hasSelection) return "rgba(100,100,100,0.3)";
@@ -449,7 +453,7 @@ export default function App() {
     for (const [idStr, [x, y]] of entries) {
       const id = parseInt(idStr);
       if (hasSelection && selectedNodes.has(id)) continue;
-      if (hasMessage && carriers.has(id)) continue;
+      if (carrierVisible(id)) continue;
       const color = bgColor(id);
       if (!color) continue;
       const [sx, sy] = toScreen(x, y);
@@ -463,7 +467,7 @@ export default function App() {
       const msgInfo = data.messageOrigins[selectedMessage];
       for (const [idStr, [x, y]] of entries) {
         const id = parseInt(idStr);
-        if (!carriers.has(id)) continue;
+        if (!carrierVisible(id)) continue;
         const [sx, sy] = toScreen(x, y);
         const isSelected = selectedNodes.has(id);
         const isOrigin = msgInfo?.origin === id;
@@ -495,7 +499,7 @@ export default function App() {
       for (const [idStr, [x, y]] of entries) {
         const id = parseInt(idStr);
         if (!selectedNodes.has(id)) continue;
-        if (hasMessage && carriers.has(id)) continue;
+        if (carrierVisible(id)) continue;
         const [sx, sy] = toScreen(x, y);
         ctx.beginPath(); ctx.arc(sx, sy, nodeSize * 2, 0, Math.PI * 2);
         ctx.fillStyle = nodeColors[id] ?? "#ef4444"; ctx.fill();
@@ -535,7 +539,7 @@ export default function App() {
     }
 
     // pass 5: message transfer markers (blue)
-    if (hasMessage) {
+    if (hasMessage && !hideCarriers) {
       const frameT = frames[frameIdx].t;
       const { bucket } = meta;
       for (const xfer of (data.transfers[selectedMessage] ?? [])) {
@@ -560,7 +564,7 @@ export default function App() {
       }
     }
   }, [data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode, showEncounters,
-      encountersByNode, selectedMessage, carriers]);
+      encountersByNode, selectedMessage, carriers, hideCarriers]);
 
   // ── effects ───────────────────────────────────────────────────────────────
 
@@ -954,10 +958,28 @@ export default function App() {
                           <span style={{ fontSize: 11, color: delivered ? "#22c55e" : "var(--color-text-secondary)" }}>
                             {delivered ? "✓ Delivered" : "In transit"}
                           </span>
+                          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--color-text-secondary)", cursor: "pointer" }}>
+                            <input type="checkbox" checked={hideCarriers} onChange={e => setHideCarriers(e.target.checked)} />
+                            Hide carriers, focus selected nodes only
+                          </label>
                           {data.deliveredPaths[selectedMessage] && (
-                            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-                              Focused on {data.deliveredPaths[selectedMessage].length} path node{data.deliveredPaths[selectedMessage].length === 1 ? "" : "s"}
-                            </span>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                              <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                                Path ({data.deliveredPaths[selectedMessage].length} node{data.deliveredPaths[selectedMessage].length === 1 ? "" : "s"}):
+                              </span>
+                              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 3, fontSize: 11 }}>
+                                {data.deliveredPaths[selectedMessage].map((nid, i) => (
+                                  <span key={i} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                                    <span style={{ color: nodeColors[nid] ?? "var(--color-text-primary)", fontWeight: 600 }}>
+                                      {nid}
+                                    </span>
+                                    {i < data.deliveredPaths[selectedMessage].length - 1 && (
+                                      <span style={{ color: "var(--color-text-secondary)", opacity: 0.5 }}>→</span>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
                           )}
                           <button onClick={() => setSelectedMessage(null)} style={{
                             marginTop: 2, padding: "2px 0", fontSize: 11, cursor: "pointer",
