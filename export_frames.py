@@ -140,6 +140,39 @@ def export(
         xfer_records = []
         print(f"No message transfers exported: {e}")
 
+    # --- delivered messages (path of nodes the message actually traveled through) ---
+    delivered_paths = {}  # msg_id -> ordered list of unique node ids in path
+    try:
+        cur.execute("""
+            SELECT message_id, path
+            FROM delivered_message_dbs
+            WHERE experiment_name LIKE ?
+        """, (f"%{experiment}%",))
+        for row in cur:
+            msg_id, path = row
+            msg_id = str(msg_id)
+            if not path:
+                continue
+            nodes_in_path = []
+            seen = set()
+            for token in str(path).split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                try:
+                    node_id = int(token.split(":")[0].strip())
+                except (ValueError, IndexError):
+                    continue
+                if node_id not in seen:
+                    seen.add(node_id)
+                    nodes_in_path.append(node_id)
+            if nodes_in_path:
+                delivered_paths[msg_id] = nodes_in_path
+        print(f"Delivered messages with path data: {len(delivered_paths):,}")
+    except Exception as e:
+        delivered_paths = {}
+        print(f"No delivered messages exported: {e}")
+
     con.close()
 
     # --- write output ---
@@ -162,6 +195,9 @@ def export(
             f.write(json.dumps(rec) + "\n")
         for rec in xfer_records:
             f.write(json.dumps(rec) + "\n")
+
+        for mid, path_nodes in delivered_paths.items():
+            f.write(json.dumps({"__delivered__": True, "id": mid, "path": path_nodes}) + "\n")
 
     print(f"Export complete → {out_path}")
     print(f"Bounds: {bounds}")

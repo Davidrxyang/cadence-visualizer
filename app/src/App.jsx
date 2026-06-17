@@ -82,6 +82,7 @@ function parseJSONL(text) {
   const encounters = [];
   const messageOrigins = {};
   const transfersRaw = [];
+  const deliveredPaths = {};
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -94,6 +95,8 @@ function parseJSONL(text) {
       messageOrigins[obj.id] = { origin: obj.origin, created: obj.created, dest: obj.dest };
     } else if (obj.__xfer__) {
       transfersRaw.push({ id: obj.id, t: obj.t, from: obj.from, to: obj.to });
+    } else if (obj.__delivered__) {
+      deliveredPaths[obj.id] = obj.path;
     } else {
       const nodes = {};
       const n = obj.n;
@@ -109,7 +112,7 @@ function parseJSONL(text) {
     (transfers[xfer.id] ??= []).push(xfer);
   }
 
-  return { meta, frames, encounters, messageOrigins, transfers };
+  return { meta, frames, encounters, messageOrigins, transfers, deliveredPaths };
 }
 
 function formatTime(unix) {
@@ -141,6 +144,7 @@ export default function App() {
 
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [msgSearch, setMsgSearch] = useState("");
+  const [onlyDelivered, setOnlyDelivered] = useState(false);
 
   const [clickedNode, setClickedNode] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -168,10 +172,12 @@ export default function App() {
   }, [data]);
 
   const filteredMessageIds = useMemo(() => {
+    let ids = allMessageIds;
+    if (onlyDelivered) ids = ids.filter(id => data?.deliveredPaths[id] !== undefined);
     const q = msgSearch.trim();
-    if (!q) return allMessageIds;
-    return allMessageIds.filter(id => id.includes(q));
-  }, [allMessageIds, msgSearch]);
+    if (!q) return ids;
+    return ids.filter(id => id.includes(q));
+  }, [allMessageIds, msgSearch, onlyDelivered, data]);
 
   const frameIdxMap = useMemo(() => {
     if (!data) return new Map();
@@ -298,7 +304,9 @@ export default function App() {
       setFrameIdx(0);
       setPlaying(false);
       setSelectedNodes(new Set());
+      setNodeColors({});
       setSelectedMessage(null);
+      setOnlyDelivered(false);
       setClickedNode(null);
     } catch (err) {
       setError(err.message);
@@ -340,6 +348,29 @@ export default function App() {
   const clearNodes = () => {
     setSelectedNodes(new Set());
     setNodeColors({});
+  };
+
+  // Focus only the nodes that were part of a delivered message's hop path,
+  // deselecting everything else and assigning each a distinct color.
+  const focusOnPathNodes = (pathNodeIds) => {
+    const ids = pathNodeIds.slice(0, MAX_SELECTED_NODES);
+    setSelectedNodes(new Set(ids));
+    setNodeColors(() => {
+      const next = {};
+      ids.forEach((id, i) => { next[id] = NODE_COLOR_PALETTE[i % NODE_COLOR_PALETTE.length]; });
+      return next;
+    });
+  };
+
+  const handleMessageClick = (id) => {
+    setSelectedMessage(prev => {
+      const next = prev === id ? null : id;
+      if (next !== null) {
+        const path = data.deliveredPaths[next];
+        if (path) focusOnPathNodes(path);
+      }
+      return next;
+    });
   };
 
   // ── canvas click ──────────────────────────────────────────────────────────
@@ -910,6 +941,10 @@ export default function App() {
                           background: "var(--color-background-primary)", color: "var(--color-text-primary)"
                         }}
                       />
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}>
+                        <input type="checkbox" checked={onlyDelivered} onChange={e => setOnlyDelivered(e.target.checked)} style={{ accentColor: "#22c55e" }} />
+                        Delivered only
+                      </label>
                       {selectedMessage && msgInfo && (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "6px 8px", borderRadius: "var(--border-radius-md)", background: "rgba(59,130,246,0.1)" }}>
                           <span style={{ fontSize: 12, color: "#3b82f6", fontWeight: 600 }}>Msg #{selectedMessage}</span>
@@ -919,6 +954,11 @@ export default function App() {
                           <span style={{ fontSize: 11, color: delivered ? "#22c55e" : "var(--color-text-secondary)" }}>
                             {delivered ? "✓ Delivered" : "In transit"}
                           </span>
+                          {data.deliveredPaths[selectedMessage] && (
+                            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                              Focused on {data.deliveredPaths[selectedMessage].length} path node{data.deliveredPaths[selectedMessage].length === 1 ? "" : "s"}
+                            </span>
+                          )}
                           <button onClick={() => setSelectedMessage(null)} style={{
                             marginTop: 2, padding: "2px 0", fontSize: 11, cursor: "pointer",
                             border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
@@ -931,18 +971,20 @@ export default function App() {
                     <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
                       {filteredMessageIds.map(id => {
                         const info = data.messageOrigins[id];
+                        const isDelivered = data.deliveredPaths[id] !== undefined;
                         return (
                           <div
                             key={id}
-                            onClick={() => setSelectedMessage(prev => prev === id ? null : id)}
+                            onClick={() => handleMessageClick(id)}
                             style={{
                               padding: "5px 8px", borderRadius: "var(--border-radius-md)", cursor: "pointer",
                               background: selectedMessage === id ? "rgba(59,130,246,0.15)" : "transparent",
                               display: "flex", flexDirection: "column", gap: 1
                             }}
                           >
-                            <span style={{ fontSize: 13, color: selectedMessage === id ? "#3b82f6" : "var(--color-text-primary)" }}>
+                            <span style={{ fontSize: 13, color: selectedMessage === id ? "#3b82f6" : "var(--color-text-primary)", display: "flex", alignItems: "center", gap: 6 }}>
                               #{id}
+                              {isDelivered && <span style={{ fontSize: 10, color: "#22c55e" }} title="Delivered">✓</span>}
                             </span>
                             {info && (
                               <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
