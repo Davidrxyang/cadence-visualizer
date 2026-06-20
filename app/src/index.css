@@ -1,5 +1,10 @@
 *, *::before, *::after { box-sizing: border-box; }
 
+@keyframes loading-bar-fill {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
 :root {
   --font-sans: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   --border-radius-lg: 10px;
