@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { DEFAULT_NODE_RADIUS, MAX_SELECTED_NODES, ENCOUNTER_BUCKET_SECONDS } from "./lib/constants";
 import { NODE_COLOR_PALETTE } from "./lib/colors";
-import { parseJSONL, formatTime } from "./lib/parse";
+import { parseJSONL, formatDisplayTime } from "./lib/parse";
 import { renderFrame } from "./lib/canvasDraw";
 import Header from "./components/Header";
 import NodesPanel from "./components/NodesPanel";
@@ -19,6 +19,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState(null);
+  const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
 
   const [selectedNodes, setSelectedNodes] = useState(new Set());
   const [nodeColors, setNodeColors] = useState({});
@@ -155,9 +156,11 @@ export default function App() {
 
   const filteredEncounterGroups = useMemo(() => {
     const q = encSearch.trim().toLowerCase();
-    if (!q) return encounterGroups;
-    return encounterGroups.filter(g => formatTime(g.t).toLowerCase().includes(q) || String(g.t).includes(q));
-  }, [encounterGroups, encSearch]);
+    if (!q || !data) return encounterGroups;
+    return encounterGroups.filter(g =>
+      formatDisplayTime(g.t, data.meta.t_min, showAbsoluteTime).toLowerCase().includes(q) || String(g.t).includes(q)
+    );
+  }, [encounterGroups, encSearch, data, showAbsoluteTime]);
 
   const carriers = useMemo(() => {
     if (!selectedMessage || !data) return new Set();
@@ -207,6 +210,38 @@ export default function App() {
     }
     return null;
   }, [selectedMessage, data, frameIdxMap]);
+
+  // hop count + end-to-end latency for a delivered message
+  const deliveryMetrics = useMemo(() => {
+    if (!selectedMessage || !data) return null;
+    const dest = data.messageOrigins[selectedMessage]?.dest;
+    const created = data.messageOrigins[selectedMessage]?.created;
+    if (dest == null || created == null) return null;
+    const deliverXfer = (data.transfers[selectedMessage] ?? []).find(x => x.to === dest);
+    if (!deliverXfer) return null;
+    const path = data.deliveredPaths[selectedMessage];
+    return { hops: path ? path.length - 1 : null, latencySeconds: deliverXfer.t - created };
+  }, [selectedMessage, data]);
+
+  // frame index nearest each 5-day mark since the experiment's first frame, for the scrubber
+  const dayMarkers = useMemo(() => {
+    if (!data) return [];
+    const { t_min, t_max } = data.meta;
+    const frames = data.frames;
+    const totalDays = Math.floor((t_max - t_min) / 86400);
+    const markers = [];
+    for (let day = 5; day <= totalDays; day += 5) {
+      const targetT = t_min + day * 86400;
+      let lo = 0, hi = frames.length - 1, best = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (frames[mid].t <= targetT) { best = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      markers.push({ idx: best, day });
+    }
+    return markers;
+  }, [data]);
 
   // ── file loading ──────────────────────────────────────────────────────────
 
@@ -551,7 +586,9 @@ export default function App() {
         <>
           <Header
             fileName={fileName}
-            timeLabel={formatTime(data.frames[frameIdx].t)}
+            timeLabel={formatDisplayTime(data.frames[frameIdx].t, data.meta.t_min, showAbsoluteTime)}
+            showAbsoluteTime={showAbsoluteTime}
+            onShowAbsoluteTimeChange={setShowAbsoluteTime}
             nodeCount={nodeCount}
             frameIdx={frameIdx}
             frameCount={data.frames.length}
@@ -629,6 +666,7 @@ export default function App() {
                     hideCarriers={hideCarriers}
                     onHideCarriersChange={setHideCarriers}
                     deliveredPath={selectedMessage ? data.deliveredPaths[selectedMessage] : null}
+                    deliveryMetrics={delivered ? deliveryMetrics : null}
                     nodeColors={nodeColors}
                     onClearSelected={() => setSelectedMessage(null)}
                     filteredMessageIds={filteredMessageIds}
@@ -646,6 +684,8 @@ export default function App() {
                     expandedT={expandedEncGroupT}
                     onToggleExpand={(t) => setExpandedEncGroupT(prev => prev === t ? null : t)}
                     onEncounterClick={openEncounterPopup}
+                    tMin={data.meta.t_min}
+                    showAbsoluteTime={showAbsoluteTime}
                   />
                 )}
               </div>
@@ -662,6 +702,9 @@ export default function App() {
             encounterTicks={encounterTicks}
             transferTicks={transferTicks}
             deliveryFrameIdx={deliveryFrameIdx}
+            dayMarkers={dayMarkers}
+            tMin={data.meta.t_min}
+            showAbsoluteTime={showAbsoluteTime}
           />
         </>
       )}
@@ -671,6 +714,8 @@ export default function App() {
         getMessages={getMessagesForEncounter}
         onClose={() => setEncounterPopup(null)}
         onMessageClick={handlePopupMessageClick}
+        tMin={data?.meta.t_min}
+        showAbsoluteTime={showAbsoluteTime}
       />
     </div>
   );

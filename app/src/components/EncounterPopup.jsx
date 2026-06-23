@@ -1,8 +1,9 @@
-import { formatTime } from "../lib/parse";
+import { formatDisplayTime } from "../lib/parse";
 
-export default function EncounterPopup({ encounter, getMessages, onClose, onMessageClick }) {
+export default function EncounterPopup({ encounter, getMessages, onClose, onMessageClick, tMin, showAbsoluteTime }) {
   if (!encounter) return null;
   const msgs = getMessages(encounter);
+  const fmt = (t) => formatDisplayTime(t, tMin, showAbsoluteTime);
 
   return (
     <div
@@ -34,7 +35,7 @@ export default function EncounterPopup({ encounter, getMessages, onClose, onMess
           }}>×</button>
         </div>
         <span style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
-          {formatTime(encounter.t)} · duration {encounter.dur}s
+          {fmt(encounter.t)} · duration {encounter.dur}s
         </span>
 
         <div style={{ borderTop: "0.5px solid var(--color-border-tertiary)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -56,7 +57,7 @@ export default function EncounterPopup({ encounter, getMessages, onClose, onMess
                 >
                   <span style={{ fontSize: 12, color: "#3b82f6", fontWeight: 600 }}>#{m.id}</span>
                   <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-                    {m.from} → {m.to} at {formatTime(m.t)}
+                    {m.from} → {m.to} at {fmt(m.t)}
                   </span>
                 </div>
               ))}

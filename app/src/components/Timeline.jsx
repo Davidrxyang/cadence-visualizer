@@ -1,12 +1,13 @@
-import { formatTime } from "../lib/parse";
+import { formatDisplayTime } from "../lib/parse";
 
 export default function Timeline({
   playing, onTogglePlay,
-  frames, frameIdx, onScrub,
-  showEncounters, encounterTicks, transferTicks, deliveryFrameIdx,
+  frames, frameIdx, onScrub, tMin, showAbsoluteTime,
+  showEncounters, encounterTicks, transferTicks, deliveryFrameIdx, dayMarkers,
 }) {
   const lastIdx = frames.length - 1;
   const pct = (idx) => `${(idx / lastIdx) * 100}%`;
+  const fmt = (t) => formatDisplayTime(t, tMin, showAbsoluteTime);
 
   return (
     <div style={{
@@ -29,7 +30,7 @@ export default function Timeline({
           <div style={{ position: "relative", height: 8 }}>
             {[...encounterTicks].map(idx => (
               <div key={idx} onClick={() => onScrub(idx)}
-                title={formatTime(frames[idx].t)}
+                title={fmt(frames[idx].t)}
                 style={{
                   position: "absolute", cursor: "pointer",
                   left: pct(idx),
@@ -44,7 +45,7 @@ export default function Timeline({
           <div style={{ position: "relative", height: 8 }}>
             {[...transferTicks].map(idx => (
               <div key={idx} onClick={() => onScrub(idx)}
-                title={formatTime(frames[idx].t)}
+                title={fmt(frames[idx].t)}
                 style={{
                   position: "absolute", cursor: "pointer",
                   left: pct(idx),
@@ -64,7 +65,7 @@ export default function Timeline({
           {deliveryFrameIdx !== null && (
             <div
               onClick={() => onScrub(deliveryFrameIdx)}
-              title={`Delivered · ${formatTime(frames[deliveryFrameIdx].t)}`}
+              title={`Delivered · ${fmt(frames[deliveryFrameIdx].t)}`}
               style={{
                 position: "absolute",
                 left: pct(deliveryFrameIdx),
@@ -79,6 +80,23 @@ export default function Timeline({
             />
           )}
         </div>
+        {dayMarkers.length > 0 && (
+          <div style={{ position: "relative", height: 14 }}>
+            {dayMarkers.map(({ idx, day }) => (
+              <div key={day} onClick={() => onScrub(idx)}
+                title={fmt(frames[idx].t)}
+                style={{
+                  position: "absolute", left: pct(idx), top: 0, cursor: "pointer",
+                  transform: "translateX(-50%)",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 1
+                }}
+              >
+                <div style={{ width: 1, height: 6, background: "rgba(255,255,255,0.25)" }} />
+                <span style={{ fontSize: 9, color: "var(--color-text-secondary)", opacity: 0.6 }}>{day}d</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

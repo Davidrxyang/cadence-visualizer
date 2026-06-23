@@ -1,6 +1,27 @@
 import { CARRIER_RESERVED_COLOR } from "./constants";
 import { hueForNode } from "./colors";
 
+// Picks a "nice" round step size (1/2/5 x a power of 10) for an axis spanning
+// `range` units, aiming for roughly `targetTicks` gridlines.
+function niceStep(range, targetTicks = 8) {
+  if (range <= 0) return 1;
+  const rough = range / targetTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const step = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+  return step * mag;
+}
+
+// Round-number tick values (in the same units as min/max) covering [min, max].
+function niceTicks(min, max, targetTicks = 8) {
+  const step = niceStep(max - min, targetTicks);
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) {
+    ticks.push(Math.round(v / step) * step);
+  }
+  return ticks;
+}
+
 export function drawTriangle(ctx, cx, cy, r, fillColor, strokeColor, lineWidth) {
   ctx.beginPath();
   ctx.moveTo(cx, cy - r);
@@ -22,23 +43,63 @@ export function renderFrame(ctx, W, H, opts) {
   } = opts;
   const { meta, frames } = data;
 
+  // grid — coordinates are in meters (confirmed against the YJMob100K source
+  // dataset: 500m grid cells over a 100km x 100km area). Ticks land on clean
+  // round km values rather than dividing the range into 10 equal (fractional) parts.
+  const xMinKm = meta.x_min / 1000, xMaxKm = meta.x_max / 1000;
+  const yMinKm = meta.y_min / 1000, yMaxKm = meta.y_max / 1000;
+  const xTicksKm = niceTicks(xMinKm, xMaxKm);
+  const yTicksKm = niceTicks(yMinKm, yMaxKm);
+
+  // PAD leaves room outside the bordered grid box for axis labels, so they never
+  // sit on top of the border or the gridlines — sized to fit the widest y-axis
+  // label (the left margin is the tight one, since labels are right-aligned into it).
+  ctx.font = "10px sans-serif";
+  const maxYLabelWidth = Math.max(0, ...yTicksKm.map(km => ctx.measureText(`${km}km`).width));
+  const PAD = Math.max(32, maxYLabelWidth + 14);
+
   const toScreen = (x, y) => {
-    const sx = ((x - meta.x_min) / (meta.x_max - meta.x_min)) * (W - 40) + 20;
-    const sy = H - (((y - meta.y_min) / (meta.y_max - meta.y_min)) * (H - 40) + 20);
+    const sx = ((x - meta.x_min) / (meta.x_max - meta.x_min)) * (W - PAD * 2) + PAD;
+    const sy = H - (((y - meta.y_min) / (meta.y_max - meta.y_min)) * (H - PAD * 2) + PAD);
     return [sx, sy];
   };
 
   ctx.clearRect(0, 0, W, H);
 
-  // grid
-  ctx.strokeStyle = "rgba(128,128,128,0.1)";
+  ctx.strokeStyle = "rgba(128,128,128,0.12)";
   ctx.lineWidth = 0.5;
-  for (let i = 0; i <= 10; i++) {
-    const x = 20 + (i / 10) * (W - 40);
-    const y = 20 + (i / 10) * (H - 40);
-    ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, H - 20); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(20, y); ctx.lineTo(W - 20, y); ctx.stroke();
+  for (const km of xTicksKm) {
+    const x = PAD + ((km - xMinKm) / (xMaxKm - xMinKm)) * (W - PAD * 2);
+    ctx.beginPath(); ctx.moveTo(x, PAD); ctx.lineTo(x, H - PAD); ctx.stroke();
   }
+  for (const km of yTicksKm) {
+    const y = H - (((km - yMinKm) / (yMaxKm - yMinKm)) * (H - PAD * 2) + PAD);
+    ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
+  }
+
+  // crisp outer border framing the grid box
+  ctx.strokeStyle = "rgba(255,255,255,0.45)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(PAD, PAD, W - PAD * 2, H - PAD * 2);
+
+  // axis tick labels, drawn outside the border so they never overlap it or the grid
+  ctx.font = "10px sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const km of xTicksKm) {
+    const x = PAD + ((km - xMinKm) / (xMaxKm - xMinKm)) * (W - PAD * 2);
+    ctx.fillText(`${km}km`, x, H - PAD + 5);
+  }
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const km of yTicksKm) {
+    const y = H - (((km - yMinKm) / (yMaxKm - yMinKm)) * (H - PAD * 2) + PAD);
+    ctx.fillText(`${km}km`, PAD - 6, y);
+  }
+  // reset to canvas defaults so later passes (labels next to nodes) aren't affected
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
 
   const total = meta.node_count;
   const hasSelection = selectedNodes.size > 0;

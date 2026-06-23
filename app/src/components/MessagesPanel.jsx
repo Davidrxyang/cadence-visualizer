@@ -1,9 +1,11 @@
+import { formatDuration } from "../lib/parse";
+
 export default function MessagesPanel({
   msgSearch, onSearchChange,
   onlyDelivered, onOnlyDeliveredChange,
   selectedMessage, msgInfo, carriers, delivered,
   hideCarriers, onHideCarriersChange,
-  deliveredPath, nodeColors, onClearSelected,
+  deliveredPath, deliveryMetrics, nodeColors, onClearSelected,
   filteredMessageIds, messageOrigins, deliveredPaths, onMessageClick,
 }) {
   return (
@@ -31,6 +33,12 @@ export default function MessagesPanel({
             <span style={{ fontSize: 11, color: delivered ? "#22c55e" : "var(--color-text-secondary)" }}>
               {delivered ? "✓ Delivered" : "In transit"}
             </span>
+            {deliveryMetrics && (
+              <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                {deliveryMetrics.hops != null ? `${deliveryMetrics.hops} hop${deliveryMetrics.hops === 1 ? "" : "s"} · ` : ""}
+                {formatDuration(deliveryMetrics.latencySeconds)} latency
+              </span>
+            )}
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--color-text-secondary)", cursor: "pointer" }}>
               <input type="checkbox" checked={hideCarriers} onChange={e => onHideCarriersChange(e.target.checked)} />
               Hide carriers, focus selected nodes only

@@ -1,7 +1,7 @@
 import Legend from "./Legend";
 
 export default function Header({
-  fileName, timeLabel, nodeCount, frameIdx, frameCount,
+  fileName, timeLabel, showAbsoluteTime, onShowAbsoluteTimeChange, nodeCount, frameIdx, frameCount,
   nodeSize, onNodeSizeChange, speed, onSpeedChange,
   sidebarTab, showPanel, selectedNodeCount, selectedMessage,
   hasMessages, hasEncounters,
@@ -22,6 +22,10 @@ export default function Header({
         </span>
       )}
       <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{timeLabel}</span>
+      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}>
+        <input type="checkbox" checked={showAbsoluteTime} onChange={e => onShowAbsoluteTimeChange(e.target.checked)} />
+        actual date
+      </label>
       <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{nodeCount} nodes</span>
       <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{frameIdx + 1} / {frameCount}</span>
       <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--color-text-secondary)", marginLeft: "auto" }}>

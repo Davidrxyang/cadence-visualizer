@@ -1,9 +1,10 @@
-import { formatTime } from "../lib/parse";
+import { formatDisplayTime } from "../lib/parse";
 
 export default function EncountersPanel({
   encSearch, onSearchChange,
-  groups, expandedT, onToggleExpand, onEncounterClick,
+  groups, expandedT, onToggleExpand, onEncounterClick, tMin, showAbsoluteTime,
 }) {
+  const fmt = (t) => formatDisplayTime(t, tMin, showAbsoluteTime);
   return (
     <>
       <div style={{ padding: "10px 12px", borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
@@ -30,7 +31,7 @@ export default function EncountersPanel({
                 display: "flex", flexDirection: "column", gap: 1
               }}
             >
-              <span style={{ whiteSpace: "nowrap" }}>time: {formatTime(group.t)}</span>
+              <span style={{ whiteSpace: "nowrap" }}>time: {fmt(group.t)}</span>
               <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
                 encounters: {group.encounters.length}
               </span>
@@ -48,7 +49,7 @@ export default function EncountersPanel({
                     }}
                   >
                     <span style={{ whiteSpace: "nowrap" }}>Node {enc.n1} ↔ Node {enc.n2}</span>
-                    <span style={{ fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" }}>{formatTime(enc.t)}</span>
+                    <span style={{ fontSize: 11, opacity: 0.7, whiteSpace: "nowrap" }}>{fmt(enc.t)}</span>
                   </div>
                 ))}
               </div>
