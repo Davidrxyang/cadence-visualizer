@@ -5,6 +5,11 @@
   100% { width: 100%; }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 :root {
   --font-sans: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   --border-radius-lg: 10px;

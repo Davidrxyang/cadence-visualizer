@@ -70,3 +70,16 @@ export function formatElapsed(seconds) {
 export function formatDisplayTime(unix, tMin, showAbsolute) {
   return showAbsolute ? formatTime(unix) : formatElapsed(unix - tMin);
 }
+
+// Convert the flat API frame format { t, n: [nodeId, x, y, ...] }
+// to the same { t, nodes: { nodeId: [x, y] } } shape that parseJSONL produces.
+export function parseAPIFrames(rawFrames) {
+  return rawFrames.map(f => {
+    const nodes = {};
+    const n = f.n;
+    for (let i = 0; i < n.length; i += 3) {
+      nodes[n[i]] = [n[i + 1], n[i + 2]];
+    }
+    return { t: f.t, nodes };
+  });
+}

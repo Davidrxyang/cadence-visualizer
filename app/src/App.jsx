@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { DEFAULT_NODE_RADIUS, MAX_SELECTED_NODES, ENCOUNTER_BUCKET_SECONDS } from "./lib/constants";
 import { NODE_COLOR_PALETTE } from "./lib/colors";
-import { parseJSONL, formatDisplayTime } from "./lib/parse";
+import { parseJSONL, parseAPIFrames, formatDisplayTime } from "./lib/parse";
 import { renderFrame } from "./lib/canvasDraw";
 import Header from "./components/Header";
 import NodesPanel from "./components/NodesPanel";
@@ -18,8 +18,14 @@ export default function App() {
   const [nodeSize, setNodeSize] = useState(DEFAULT_NODE_RADIUS);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState("");
   const [fileName, setFileName] = useState(null);
   const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
+
+  // API-backed experiment selector
+  const [experiments, setExperiments] = useState(null);
+  const [serverAvailable, setServerAvailable] = useState(null);
+  const [loadingExpData, setLoadingExpData] = useState(false);
 
   const [selectedNodes, setSelectedNodes] = useState(new Set());
   const [nodeColors, setNodeColors] = useState({});
@@ -45,6 +51,15 @@ export default function App() {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
   const lastTickRef = useRef(null);
+  const activeExpRef = useRef(null); // guards against stale phase-2 responses
+
+  // Check if the backend API is running on mount
+  useEffect(() => {
+    fetch("/api/experiments")
+      .then(r => r.json())
+      .then(d => { setExperiments(d.experiments); setServerAvailable(true); })
+      .catch(() => setServerAvailable(false));
+  }, []);
 
   // ── derived from data ─────────────────────────────────────────────────────
 
@@ -267,20 +282,66 @@ export default function App() {
       if (!parsed.frames.length) throw new Error("No frames found in file.");
       setData(parsed);
       setFileName(file.name);
-      setFrameIdx(0);
-      setPlaying(false);
-      setSelectedNodes(new Set());
-      setNodeColors({});
-      setSelectedMessage(null);
-      setOnlyDelivered(false);
-      setClickedNode(null);
-      setEncSearch("");
-      setExpandedEncGroupT(null);
-      setEncounterPopup(null);
+      resetVisualizerState();
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resetVisualizerState = () => {
+    setFrameIdx(0);
+    setPlaying(false);
+    setSelectedNodes(new Set());
+    setNodeColors({});
+    setSelectedMessage(null);
+    setOnlyDelivered(false);
+    setClickedNode(null);
+    setEncSearch("");
+    setExpandedEncGroupT(null);
+    setEncounterPopup(null);
+  };
+
+  const handleExperimentSelect = async (name) => {
+    activeExpRef.current = name;
+    setLoading(true);
+    setError(null);
+    setLoadingStatus("Loading frames…");
+    try {
+      // Phase 1: fetch meta + frames (~2s) — show the canvas immediately
+      const [metaRes, framesRes] = await Promise.all([
+        fetch("/api/meta"),
+        fetch("/api/frames"),
+      ]);
+      if (!metaRes.ok) throw new Error(`Meta fetch failed: ${metaRes.status}`);
+      if (!framesRes.ok) throw new Error(`Frames fetch failed: ${framesRes.status}`);
+      const [metaData, framesData] = await Promise.all([metaRes.json(), framesRes.json()]);
+      const frames = parseAPIFrames(framesData.frames);
+      if (!frames.length) throw new Error("No frames returned from API.");
+
+      setData({ meta: metaData, frames, encounters: [], messageOrigins: {}, transfers: {}, deliveredPaths: {} });
+      setFileName(name);
+      resetVisualizerState();
+      setLoading(false);
+      setLoadingStatus("");
+
+      // Phase 2: fetch experiment-specific data in the background (~10-20s)
+      // The canvas is already live; messages/encounters populate when ready.
+      setLoadingExpData(true);
+      const expRes = await fetch(`/api/experiment-data/${encodeURIComponent(name)}`);
+      if (!expRes.ok) throw new Error(`Experiment data fetch failed: ${expRes.status}`);
+      const expData = await expRes.json();
+      // Only apply if the user hasn't switched to a different experiment
+      if (activeExpRef.current === name) {
+        setData(prev => prev ? { ...prev, ...expData } : prev);
+      }
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+      setLoadingStatus("");
+    } finally {
+      if (activeExpRef.current === name) setLoadingExpData(false);
     }
   };
 
@@ -301,6 +362,7 @@ export default function App() {
     setEncSearch("");
     setExpandedEncGroupT(null);
     setEncounterPopup(null);
+    setLoadingExpData(false);
   };
 
   const toggleNode = (id) => {
@@ -514,30 +576,58 @@ export default function App() {
       {!data && (
         <div style={{
           flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          gap: 22, background: "var(--color-background-secondary)"
+          gap: 22, background: "var(--color-background-secondary)", padding: "0 24px"
         }}>
           <h1 style={{ fontSize: 28, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
             Welcome to the Cadence Simulator Visualizer
           </h1>
-          <p style={{ fontSize: 19, color: "var(--color-text-secondary)", margin: 0 }}>
-            Please select an experiment
-          </p>
-          <p style={{ fontSize: 16, color: "var(--color-text-secondary)", opacity: 0.7, margin: 0 }}>
-            Load your <code>frames.jsonl</code> or <code>frames.jsonl.gz</code> file
-          </p>
+
+          {/* Experiment selector — only shown when the backend is running */}
+          {serverAvailable && experiments && !loading && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center", width: "100%", maxWidth: 560 }}>
+              <p style={{ fontSize: 19, color: "var(--color-text-secondary)", margin: 0 }}>
+                Select an experiment
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+                {experiments.map(name => (
+                  <button
+                    key={name}
+                    onClick={() => handleExperimentSelect(name)}
+                    style={{
+                      padding: "9px 16px", borderRadius: "var(--border-radius-md)", fontSize: 14,
+                      border: "0.5px solid var(--color-border-secondary)", cursor: "pointer",
+                      background: "var(--color-background-primary)", color: "var(--color-text-primary)",
+                    }}
+                  >
+                    {name.replace(/^japan - /, "")}
+                  </button>
+                ))}
+              </div>
+              <span style={{ fontSize: 13, color: "var(--color-text-secondary)", opacity: 0.5 }}>— or —</span>
+            </div>
+          )}
+
+          {/* Loading state (covers both file and API loading) */}
           {loading ? (
-            <div style={{
-              position: "relative", overflow: "hidden", textAlign: "center",
-              padding: "11px 26px", borderRadius: "var(--border-radius-md)", fontSize: 17,
-              border: "0.5px solid var(--color-border-secondary)",
-              background: "var(--color-background-primary)", color: "var(--color-text-primary)"
-            }}>
-              <span style={{ opacity: 0, userSelect: "none" }}>Choose file</span>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{
-                position: "absolute", left: 0, top: 0, bottom: 0,
-                background: "var(--color-text-primary)", opacity: 0.25,
-                animation: "loading-bar-fill 1.4s ease-in-out infinite"
-              }} />
+                position: "relative", overflow: "hidden", textAlign: "center",
+                padding: "11px 26px", borderRadius: "var(--border-radius-md)", fontSize: 17,
+                border: "0.5px solid var(--color-border-secondary)",
+                background: "var(--color-background-primary)", color: "var(--color-text-primary)"
+              }}>
+                <span style={{ opacity: 0, userSelect: "none" }}>Choose file</span>
+                <div style={{
+                  position: "absolute", left: 0, top: 0, bottom: 0,
+                  background: "var(--color-text-primary)", opacity: 0.25,
+                  animation: "loading-bar-fill 1.4s ease-in-out infinite"
+                }} />
+              </div>
+              {loadingStatus && (
+                <span style={{ fontSize: 13, color: "var(--color-text-secondary)", opacity: 0.7 }}>
+                  {loadingStatus}
+                </span>
+              )}
             </div>
           ) : (
             <label style={{
@@ -545,11 +635,13 @@ export default function App() {
               border: "0.5px solid var(--color-border-secondary)", fontSize: 17,
               background: "var(--color-background-primary)", color: "var(--color-text-primary)"
             }}>
-              Choose file
+              {serverAvailable ? "Load from file" : "Choose file"}
               <input type="file" accept=".jsonl,.gz" onChange={handleFile} style={{ display: "none" }} />
             </label>
           )}
+
           {error && <p style={{ fontSize: 15, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
+
           <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
             <span style={{ fontSize: 14, color: "var(--color-text-secondary)", opacity: 0.6 }}>
               Authors: Ruoxing Yang, Harel Berger, Micah Sherr, Adam Aviv
@@ -632,6 +724,16 @@ export default function App() {
                 display: "flex", flexDirection: "column", overflow: "hidden",
                 background: "var(--color-background-secondary)"
               }}>
+                {loadingExpData && (
+                  <div style={{
+                    padding: "6px 10px", fontSize: 11, color: "var(--color-text-secondary)",
+                    borderBottom: "0.5px solid var(--color-border-tertiary)",
+                    background: "rgba(59,130,246,0.07)", display: "flex", alignItems: "center", gap: 6
+                  }}>
+                    <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⟳</span>
+                    Loading message data…
+                  </div>
+                )}
                 {sidebarTab === "nodes" && (
                   <NodesPanel
                     nodeSearch={nodeSearch}
