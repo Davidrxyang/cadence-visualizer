@@ -1,40 +1,35 @@
-import { useState, useEffect, useRef, useMemo } from "react";
-import { DEFAULT_NODE_RADIUS } from "./lib/constants";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { DEFAULT_NODE_RADIUS, MAX_SELECTED_NODES } from "./lib/constants";
+import { NODE_COLOR_PALETTE } from "./lib/colors";
 import { parseJSONL, parseAPIFrames, formatDisplayTime } from "./lib/parse";
 import { useVisualizerPanel } from "./hooks/useVisualizerPanel";
 import Header from "./components/Header";
 import VisualizerPanel from "./components/VisualizerPanel";
+import CombinedSidebar from "./components/CombinedSidebar";
 import Timeline from "./components/Timeline";
 
+// ── Welcome step helpers ──────────────────────────────────────────────────────
+
+const GH_ICON = (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+  </svg>
+);
+
 export default function App() {
-  // ── shared playback state ─────────────────────────────────────────────────
-  const [frameIdx, setFrameIdx] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(5);
-  const [nodeSize, setNodeSize] = useState(DEFAULT_NODE_RADIUS);
-  const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
-  const [splitView, setSplitView] = useState(false);
+  // ── Welcome flow ──────────────────────────────────────────────────────────
+  // 'mode'   → choose 1 or 2 experiments
+  // 'select' → pick experiment(s) from the list
+  // 'loading'→ blocking load screen before visualizer opens
+  const [welcomeStep, setWelcomeStep] = useState("mode");
+  const [mode, setMode] = useState(null); // 'single' | 'split'
+  const [pendingExps, setPendingExps] = useState([]); // names being selected
+  const [loadProgress, setLoadProgress] = useState({ frames: false, exp1: false, exp2: false });
 
-  // ── panel 1 data ──────────────────────────────────────────────────────────
-  const [data, setData] = useState(null);
-  const [fileName, setFileName] = useState(null);
-  const [loadingExpData, setLoadingExpData] = useState(false);
-  const activeExpRef = useRef(null);
-
-  // ── panel 2 data ──────────────────────────────────────────────────────────
-  const [data2, setData2] = useState(null);
-  const [fileName2, setFileName2] = useState(null);
-  const [loadingExpData2, setLoadingExpData2] = useState(false);
-  const activeExp2Ref = useRef(null);
-
-  // ── loading / error ───────────────────────────────────────────────────────
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loadingStatus, setLoadingStatus] = useState("");
-
-  // ── API experiment list ───────────────────────────────────────────────────
+  // ── Experiment list (from server) ─────────────────────────────────────────
   const [experiments, setExperiments] = useState(null);
   const [serverAvailable, setServerAvailable] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetch("/api/experiments")
@@ -43,14 +38,160 @@ export default function App() {
       .catch(() => setServerAvailable(false));
   }, []);
 
-  // ── shared scrub callback (also stops playback) ───────────────────────────
-  const onScrub = (idx) => { setPlaying(false); setFrameIdx(idx); };
+  // ── Loaded experiment data ────────────────────────────────────────────────
+  const [data, setData] = useState(null);   // exp 1
+  const [data2, setData2] = useState(null); // exp 2 (null in single mode)
+  const [fileName, setFileName] = useState(null);
+  const [fileName2, setFileName2] = useState(null);
 
-  // ── per-panel hook instances ───────────────────────────────────────────────
-  const panel1 = useVisualizerPanel(data, frameIdx, showAbsoluteTime, onScrub);
-  const panel2 = useVisualizerPanel(data2, frameIdx, showAbsoluteTime, onScrub);
+  // Visualizer is open once all required data is loaded
+  const visualizerOpen = mode === "split"
+    ? (!!data && !!data2)
+    : !!data;
 
-  // ── day markers (shared — same frames for all experiments) ────────────────
+  // ── Playback state ────────────────────────────────────────────────────────
+  const [frameIdx, setFrameIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(5);
+  const [nodeSize, setNodeSize] = useState(DEFAULT_NODE_RADIUS);
+  const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
+  const [showLegend, setShowLegend] = useState(false);
+
+  const onScrub = useCallback((idx) => { setPlaying(false); setFrameIdx(idx); }, []);
+
+  // ── Shared selection state (both canvases use the same selection) ──────────
+  const [selectedNodes, setSelectedNodes] = useState(new Set());
+  const [nodeColors, setNodeColors] = useState({});
+  const [selectedMessage, setSelectedMessage] = useState(null);
+  const [filterMode, setFilterMode] = useState("highlight");
+  const [showEncounters, setShowEncounters] = useState(true);
+  const [hideCarriers, setHideCarriers] = useState(false);
+
+  // Sidebar UI state (shared)
+  const [sidebarTab, setSidebarTab] = useState("messages");
+  const [nodeSearch, setNodeSearch] = useState("");
+  const [msgSearch, setMsgSearch] = useState("");
+  const [onlyDelivered, setOnlyDelivered] = useState(false);
+  const [encSearch, setEncSearch] = useState("");
+  const [expandedEncGroupT, setExpandedEncGroupT] = useState(null);
+
+  const selection = useMemo(() => ({
+    selectedNodes, nodeColors, selectedMessage, filterMode, showEncounters, hideCarriers,
+  }), [selectedNodes, nodeColors, selectedMessage, filterMode, showEncounters, hideCarriers]);
+
+  // ── Selection handlers ────────────────────────────────────────────────────
+
+  const focusOnPathNodes = useCallback((pathNodeIds) => {
+    const ids = pathNodeIds.slice(0, MAX_SELECTED_NODES);
+    setSelectedNodes(new Set(ids));
+    setNodeColors(() => {
+      const next = {};
+      ids.forEach((id, i) => { next[id] = NODE_COLOR_PALETTE[i % NODE_COLOR_PALETTE.length]; });
+      return next;
+    });
+  }, []);
+
+  const handleMessageClick = useCallback((id) => {
+    // Toggle: re-clicking the selected message clears it
+    if (selectedMessage === id) {
+      setSelectedMessage(null);
+      return;
+    }
+    setSelectedMessage(id);
+
+    // Collect nodes relevant to this message from one experiment's data
+    const getFromData = (d) => {
+      if (!d) return [];
+      const path = d.deliveredPaths[id];
+      if (path) return path;
+      const origin = d.messageOrigins[id]?.origin;
+      const ids = [];
+      const seen = new Set();
+      if (origin !== undefined) { ids.push(origin); seen.add(origin); }
+      for (const xfer of (d.transfers[id] ?? [])) {
+        if (!seen.has(xfer.to)) { seen.add(xfer.to); ids.push(xfer.to); }
+      }
+      return ids;
+    };
+
+    const nodes1 = getFromData(data);
+    const nodes2 = getFromData(data2);
+
+    if (data2) {
+      // Split mode: union nodes from both experiments.
+      // Shared nodes (in both paths) get white so they look the same on both canvases.
+      // Experiment-unique nodes get sequential palette colors.
+      const set1 = new Set(nodes1);
+      const set2 = new Set(nodes2);
+      const shared = nodes1.filter(n => set2.has(n));
+      const only1  = nodes1.filter(n => !set2.has(n));
+      const only2  = nodes2.filter(n => !set1.has(n));
+      const allIds = [...shared, ...only1, ...only2].slice(0, MAX_SELECTED_NODES);
+      if (allIds.length) {
+        setSelectedNodes(new Set(allIds));
+        setNodeColors(() => {
+          const next = {};
+          let pi = 0;
+          shared.forEach(n => { next[n] = "#ffffff"; });
+          only1.forEach(n => { next[n] = NODE_COLOR_PALETTE[pi++ % NODE_COLOR_PALETTE.length]; });
+          only2.forEach(n => { next[n] = NODE_COLOR_PALETTE[pi++ % NODE_COLOR_PALETTE.length]; });
+          return next;
+        });
+      }
+    } else {
+      if (nodes1.length) focusOnPathNodes(nodes1);
+    }
+  }, [selectedMessage, data, data2, focusOnPathNodes]);
+
+  const toggleNode = useCallback((id) => {
+    setSelectedNodes(prev => {
+      if (prev.has(id)) { const next = new Set(prev); next.delete(id); return next; }
+      if (prev.size >= MAX_SELECTED_NODES) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      setNodeColors(c => c[id] ? c : { ...c, [id]: NODE_COLOR_PALETTE[(next.size - 1) % NODE_COLOR_PALETTE.length] });
+      return next;
+    });
+  }, []);
+
+  const setNodeColor = useCallback((id, color) => {
+    setNodeColors(prev => ({ ...prev, [id]: color }));
+  }, []);
+
+  const selectAllNodes = useCallback((ids) => {
+    setSelectedNodes(new Set(ids));
+    setNodeColors(prev => {
+      const next = { ...prev };
+      ids.forEach((id, i) => { if (!next[id]) next[id] = NODE_COLOR_PALETTE[i % NODE_COLOR_PALETTE.length]; });
+      return next;
+    });
+  }, []);
+
+  const clearNodes = useCallback(() => {
+    setSelectedNodes(new Set());
+    setNodeColors({});
+  }, []);
+
+  const resetSelection = useCallback(() => {
+    setSelectedNodes(new Set());
+    setNodeColors({});
+    setSelectedMessage(null);
+    setFilterMode("highlight");
+    setShowEncounters(true);
+    setHideCarriers(false);
+    setSidebarTab("messages");
+    setNodeSearch("");
+    setMsgSearch("");
+    setOnlyDelivered(false);
+    setEncSearch("");
+    setExpandedEncGroupT(null);
+  }, []);
+
+  // ── Panel hook instances ──────────────────────────────────────────────────
+  const panel1 = useVisualizerPanel(data, frameIdx, onScrub, selection, handleMessageClick);
+  const panel2 = useVisualizerPanel(data2, frameIdx, onScrub, selection, handleMessageClick);
+
+  // ── Day markers (shared — same frames for both experiments) ───────────────
   const dayMarkers = useMemo(() => {
     const d = data ?? data2;
     if (!d) return [];
@@ -71,7 +212,7 @@ export default function App() {
     return markers;
   }, [data, data2]);
 
-  // ── animation loop ────────────────────────────────────────────────────────
+  // ── Animation loop ────────────────────────────────────────────────────────
   const animRef = useRef(null);
   const lastTickRef = useRef(null);
   const activeData = data ?? data2;
@@ -94,15 +235,8 @@ export default function App() {
     return () => { cancelAnimationFrame(animRef.current); lastTickRef.current = null; };
   }, [playing, activeData, speed]);
 
-  // ── loading helpers ───────────────────────────────────────────────────────
+  // ── Fetch helpers ─────────────────────────────────────────────────────────
 
-  const resetVisualizerState = () => {
-    setFrameIdx(0);
-    setPlaying(false);
-    panel1.reset();
-  };
-
-  // Fetch just meta + frames (phase 1). Returns { meta, frames } or throws.
   const fetchFrames = async () => {
     const [metaRes, framesRes] = await Promise.all([
       fetch("/api/meta"),
@@ -116,47 +250,54 @@ export default function App() {
     return { meta: metaData, frames };
   };
 
-  // Fetch experiment-specific data (encounters + messages). Returns exp fields or throws.
   const fetchExpData = async (name) => {
     const res = await fetch(`/api/experiment-data/${encodeURIComponent(name)}`);
     if (!res.ok) throw new Error(`Experiment data fetch failed: ${res.status}`);
     return res.json();
   };
 
-  // ── panel 1 experiment select ─────────────────────────────────────────────
+  // ── Blocking load (called after experiments are selected) ─────────────────
 
-  const handleExperimentSelect = async (name) => {
-    activeExpRef.current = name;
-    setLoading(true);
+  const startLoading = async (exps) => {
+    setWelcomeStep("loading");
     setError(null);
-    setLoadingStatus("Loading frames…");
+    setLoadProgress({ frames: false, exp1: false, exp2: false });
     try {
-      const { meta, frames } = await fetchFrames();
-      setData({ meta, frames, encounters: [], messageOrigins: {}, transfers: {}, deliveredPaths: {} });
-      setFileName(name);
-      resetVisualizerState();
-      setLoading(false);
-      setLoadingStatus("");
+      const tasks = [
+        fetchFrames().then(r => { setLoadProgress(p => ({ ...p, frames: true })); return r; }),
+        fetchExpData(exps[0]).then(r => { setLoadProgress(p => ({ ...p, exp1: true })); return r; }),
+        exps[1]
+          ? fetchExpData(exps[1]).then(r => { setLoadProgress(p => ({ ...p, exp2: true })); return r; })
+          : Promise.resolve(null),
+      ];
 
-      setLoadingExpData(true);
-      const expData = await fetchExpData(name);
-      if (activeExpRef.current === name) {
-        setData(prev => prev ? { ...prev, ...expData } : prev);
+      const [framesResult, exp1Result, exp2Result] = await Promise.all(tasks);
+
+      resetSelection();
+      setFrameIdx(0);
+      setPlaying(false);
+
+      setData({ ...framesResult, ...exp1Result });
+      setFileName(exps[0]);
+
+      if (exps[1] && exp2Result) {
+        setData2({ ...framesResult, ...exp2Result });
+        setFileName2(exps[1]);
       }
     } catch (err) {
       setError(err.message);
-      setLoading(false);
-      setLoadingStatus("");
-    } finally {
-      if (activeExpRef.current === name) setLoadingExpData(false);
+      setWelcomeStep("select");
     }
   };
+
+  // ── File load (single mode only) ──────────────────────────────────────────
 
   const handleFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setLoading(true);
+    setWelcomeStep("loading");
     setError(null);
+    setLoadProgress({ frames: true, exp1: false, exp2: false });
     try {
       let text;
       if (file.name.endsWith(".gz")) {
@@ -172,253 +313,352 @@ export default function App() {
       }
       const parsed = parseJSONL(text);
       if (!parsed.frames.length) throw new Error("No frames found in file.");
+      setLoadProgress({ frames: true, exp1: true, exp2: true });
+      resetSelection();
+      setFrameIdx(0);
+      setPlaying(false);
       setData(parsed);
       setFileName(file.name);
-      resetVisualizerState();
     } catch (err) {
       setError(err.message);
-    } finally {
-      setLoading(false);
+      setWelcomeStep("select");
     }
   };
 
-  // ── panel 2 experiment select ─────────────────────────────────────────────
-
-  const handleExperiment2Select = async (name) => {
-    activeExp2Ref.current = name;
-    panel2.reset();
-    try {
-      // Reuse already-loaded meta + frames from panel 1 (same dataset)
-      const baseFrames = data
-        ? { meta: data.meta, frames: data.frames }
-        : await fetchFrames();
-
-      setData2({ ...baseFrames, encounters: [], messageOrigins: {}, transfers: {}, deliveredPaths: {} });
-      setFileName2(name);
-
-      setLoadingExpData2(true);
-      const expData = await fetchExpData(name);
-      if (activeExp2Ref.current === name) {
-        setData2(prev => prev ? { ...prev, ...expData } : prev);
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      if (activeExp2Ref.current === name) setLoadingExpData2(false);
-    }
-  };
-
-  // ── home ──────────────────────────────────────────────────────────────────
+  // ── Home ──────────────────────────────────────────────────────────────────
 
   const handleGoHome = () => {
-    setData(null); setFileName(null); setLoadingExpData(false);
-    setData2(null); setFileName2(null); setLoadingExpData2(false);
-    setError(null); setFrameIdx(0); setPlaying(false);
-    setSplitView(false);
-    activeExpRef.current = null;
-    activeExp2Ref.current = null;
-    panel1.reset();
-    panel2.reset();
+    setData(null); setData2(null);
+    setFileName(null); setFileName2(null);
+    setWelcomeStep("mode");
+    setMode(null);
+    setPendingExps([]);
+    setError(null);
+    setFrameIdx(0);
+    setPlaying(false);
+    resetSelection();
   };
 
-  const toggleSplitView = () => {
-    setSplitView(v => {
-      if (!v) return true; // opening split — panel 2 starts empty
-      setData2(null); setFileName2(null); setLoadingExpData2(false);
-      activeExp2Ref.current = null;
-      panel2.reset();
-      return false;
+  // ── Welcome step: experiment selection toggle ──────────────────────────────
+
+  const togglePendingExp = (name) => {
+    if (mode === "single") {
+      // Single mode: clicking an experiment starts loading immediately
+      startLoading([name]);
+      return;
+    }
+    // Split mode: select up to 2; clicking selected one deselects it
+    setPendingExps(prev => {
+      if (prev.includes(name)) return prev.filter(n => n !== name);
+      if (prev.length >= 2) return [prev[1], name]; // replace oldest
+      return [...prev, name];
     });
   };
 
-  // ── render ────────────────────────────────────────────────────────────────
+  // ── Timeline ticks ────────────────────────────────────────────────────────
 
-  const timelineData = data ?? data2;
-  const combinedEncTicks = new Set([...panel1.encounterTicks, ...panel2.encounterTicks]);
-  const combinedXferTicks = new Set([...panel1.transferTicks, ...panel2.transferTicks]);
-  const combinedDeliveryIdx = panel1.deliveryFrameIdx ?? panel2.deliveryFrameIdx;
-  const showEncountersOnTimeline = panel1.showEncounters || panel2.showEncounters;
+  const combinedEncTicks = useMemo(() => new Set([...panel1.encounterTicks, ...panel2.encounterTicks]), [panel1.encounterTicks, panel2.encounterTicks]);
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const expNames = [fileName, fileName2].filter(Boolean);
 
   return (
     <div style={{ fontFamily: "var(--font-sans)", display: "flex", flexDirection: "column", height: "100vh" }}>
 
-      {/* ── Welcome screen ─────────────────────────────────────────────── */}
-      {!data && !data2 && (
+      {/* ══ Welcome screen ════════════════════════════════════════════════════ */}
+      {!visualizerOpen && (
         <div style={{
           flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
-          justifyContent: "center", gap: 22, background: "var(--color-background-secondary)", padding: "0 24px"
+          justifyContent: "center", gap: 24,
+          background: "var(--color-background-secondary)", padding: "0 24px",
         }}>
-          <h1 style={{ fontSize: 28, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
-            Welcome to the Cadence Simulator Visualizer
-          </h1>
 
-          {serverAvailable && experiments && !loading && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center", width: "100%", maxWidth: 560 }}>
-              <p style={{ fontSize: 19, color: "var(--color-text-secondary)", margin: 0 }}>
-                Select an experiment
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
-                {experiments.map(name => (
-                  <button
-                    key={name}
-                    onClick={() => handleExperimentSelect(name)}
-                    style={{
-                      padding: "9px 16px", borderRadius: "var(--border-radius-md)", fontSize: 14,
-                      border: "0.5px solid var(--color-border-secondary)", cursor: "pointer",
-                      background: "var(--color-background-primary)", color: "var(--color-text-primary)",
-                    }}
-                  >
-                    {name.replace(/^japan - /, "")}
-                  </button>
+          {/* ── Loading screen ───────────────────────────────────────────── */}
+          {welcomeStep === "loading" && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, width: "100%", maxWidth: 480 }}>
+              <h2 style={{ fontSize: 22, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
+                Loading…
+              </h2>
+              <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+                {[
+                  { key: "frames", label: "Loading frames" },
+                  { key: "exp1", label: `Loading ${(pendingExps[0] ?? "experiment 1").replace(/^japan - /, "")}` },
+                  ...(mode === "split" ? [{ key: "exp2", label: `Loading ${(pendingExps[1] ?? "experiment 2").replace(/^japan - /, "")}` }] : []),
+                ].map(({ key, label }) => (
+                  <div key={key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{label}</span>
+                      <span style={{ fontSize: 12, color: loadProgress[key] ? "#22c55e" : "var(--color-text-secondary)", opacity: loadProgress[key] ? 1 : 0.5 }}>
+                        {loadProgress[key] ? "✓" : "⟳"}
+                      </span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: "var(--color-background-primary)", overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", borderRadius: 3,
+                        background: loadProgress[key] ? "#22c55e" : "var(--color-text-secondary)",
+                        opacity: loadProgress[key] ? 1 : 0.3,
+                        width: loadProgress[key] ? "100%" : "0%",
+                        transition: "width 0.4s ease, background 0.3s",
+                        animation: !loadProgress[key] ? "loading-bar-fill 1.4s ease-in-out infinite" : "none",
+                      }} />
+                    </div>
+                  </div>
                 ))}
               </div>
-              <span style={{ fontSize: 13, color: "var(--color-text-secondary)", opacity: 0.5 }}>— or —</span>
+              {error && <p style={{ fontSize: 14, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
             </div>
           )}
 
-          {loading ? (
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <div style={{
-                position: "relative", overflow: "hidden", textAlign: "center",
-                padding: "11px 26px", borderRadius: "var(--border-radius-md)", fontSize: 17,
-                border: "0.5px solid var(--color-border-secondary)",
-                background: "var(--color-background-primary)", color: "var(--color-text-primary)"
-              }}>
-                <span style={{ opacity: 0, userSelect: "none" }}>Choose file</span>
-                <div style={{
-                  position: "absolute", left: 0, top: 0, bottom: 0,
-                  background: "var(--color-text-primary)", opacity: 0.25,
-                  animation: "loading-bar-fill 1.4s ease-in-out infinite"
-                }} />
+          {/* ── Mode selection ───────────────────────────────────────────── */}
+          {welcomeStep === "mode" && (
+            <>
+              <h1 style={{ fontSize: 28, fontWeight: 600, color: "var(--color-text-primary)", margin: 0, textAlign: "center" }}>
+                Welcome to the Cadence Simulator Visualizer
+              </h1>
+              <p style={{ fontSize: 18, color: "var(--color-text-secondary)", margin: 0 }}>
+                How many experiments would you like to open?
+              </p>
+              <div style={{ display: "flex", gap: 16 }}>
+                <button
+                  onClick={() => { setMode("single"); setWelcomeStep("select"); }}
+                  style={{
+                    padding: "14px 32px", borderRadius: "var(--border-radius-md)", fontSize: 16,
+                    border: "0.5px solid var(--color-border-secondary)", cursor: "pointer",
+                    background: "var(--color-background-primary)", color: "var(--color-text-primary)",
+                    fontWeight: 500,
+                  }}
+                >
+                  1 Experiment
+                </button>
+                <button
+                  onClick={() => { setMode("split"); setWelcomeStep("select"); }}
+                  style={{
+                    padding: "14px 32px", borderRadius: "var(--border-radius-md)", fontSize: 16,
+                    border: "0.5px solid var(--color-border-secondary)", cursor: "pointer",
+                    background: "var(--color-background-primary)", color: "var(--color-text-primary)",
+                    fontWeight: 500,
+                  }}
+                >
+                  2 Experiments
+                </button>
               </div>
-              {loadingStatus && (
-                <span style={{ fontSize: 13, color: "var(--color-text-secondary)", opacity: 0.7 }}>
-                  {loadingStatus}
+
+              <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+                <span style={{ fontSize: 14, color: "var(--color-text-secondary)", opacity: 0.6 }}>
+                  Authors: Ruoxing Yang, Harel Berger, Micah Sherr, Adam Aviv
                 </span>
-              )}
-            </div>
-          ) : (
-            <label style={{
-              cursor: "pointer", padding: "11px 26px", borderRadius: "var(--border-radius-md)",
-              border: "0.5px solid var(--color-border-secondary)", fontSize: 17,
-              background: "var(--color-background-primary)", color: "var(--color-text-primary)"
-            }}>
-              {serverAvailable ? "Load from file" : "Choose file"}
-              <input type="file" accept=".jsonl,.gz" onChange={handleFile} style={{ display: "none" }} />
-            </label>
+                <span style={{ fontSize: 14, color: "var(--color-text-secondary)", opacity: 0.6 }}>
+                  Visualization Software created by Ruoxing Yang
+                </span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "var(--color-text-secondary)", opacity: 0.5, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  GitHub Repositories
+                </span>
+                <div style={{ display: "flex", gap: 20, fontSize: 15 }}>
+                  <a href="https://github.com/GUSecLab/cadence" target="_blank" rel="noopener noreferrer" style={{ color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
+                    {GH_ICON} Cadence Simulator
+                  </a>
+                  <a href="https://github.com/Davidrxyang/cadence-visualizer" target="_blank" rel="noopener noreferrer" style={{ color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
+                    {GH_ICON} Cadence Visualizer
+                  </a>
+                </div>
+              </div>
+            </>
           )}
 
-          {error && <p style={{ fontSize: 15, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
+          {/* ── Experiment selection ─────────────────────────────────────── */}
+          {welcomeStep === "select" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <button
+                  onClick={() => { setMode(null); setWelcomeStep("mode"); setPendingExps([]); setError(null); }}
+                  style={{ padding: "6px 12px", fontSize: 13, cursor: "pointer", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" }}
+                >
+                  ← Back
+                </button>
+                <h2 style={{ fontSize: 20, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
+                  {mode === "single" ? "Select an experiment" : "Select two experiments to compare"}
+                </h2>
+              </div>
 
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-            <span style={{ fontSize: 14, color: "var(--color-text-secondary)", opacity: 0.6 }}>
-              Authors: Ruoxing Yang, Harel Berger, Micah Sherr, Adam Aviv
-            </span>
-            <span style={{ fontSize: 14, color: "var(--color-text-secondary)", opacity: 0.6 }}>
-              Visualization Software created by Ruoxing Yang
-            </span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center", marginTop: 6 }}>
-            <span style={{ fontSize: 12, color: "var(--color-text-secondary)", opacity: 0.5, textTransform: "uppercase", letterSpacing: 0.5 }}>
-              GitHub Repositories
-            </span>
-            <div style={{ display: "flex", gap: 20, fontSize: 15 }}>
-              <a href="https://github.com/GUSecLab/cadence" target="_blank" rel="noopener noreferrer"
-                style={{ color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
-                </svg>
-                Cadence Simulator
-              </a>
-              <a href="https://github.com/Davidrxyang/cadence-visualizer" target="_blank" rel="noopener noreferrer"
-                style={{ color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
-                </svg>
-                Cadence Visualizer
-              </a>
-            </div>
-          </div>
+              {mode === "split" && pendingExps.length > 0 && (
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
+                  {pendingExps.map((name, i) => (
+                    <span key={i} style={{ padding: "5px 12px", borderRadius: "var(--border-radius-md)", background: "rgba(59,130,246,0.15)", border: "0.5px solid rgba(59,130,246,0.4)", fontSize: 13, color: "#3b82f6" }}>
+                      {["①", "②"][i]} {name.replace(/^japan - /, "")}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {serverAvailable && experiments && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", maxWidth: 640 }}>
+                  {experiments.map(name => {
+                    const selIdx = pendingExps.indexOf(name);
+                    const isSelected = selIdx >= 0;
+                    return (
+                      <button
+                        key={name}
+                        onClick={() => togglePendingExp(name)}
+                        style={{
+                          padding: "9px 16px", borderRadius: "var(--border-radius-md)", fontSize: 14,
+                          border: isSelected
+                            ? "0.5px solid rgba(59,130,246,0.7)"
+                            : "0.5px solid var(--color-border-secondary)",
+                          cursor: "pointer",
+                          background: isSelected ? "rgba(59,130,246,0.15)" : "var(--color-background-primary)",
+                          color: isSelected ? "#3b82f6" : "var(--color-text-primary)",
+                          fontWeight: isSelected ? 600 : 400,
+                        }}
+                      >
+                        {isSelected && <span style={{ marginRight: 4 }}>{["①", "②"][selIdx]}</span>}
+                        {name.replace(/^japan - /, "")}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!serverAvailable && (
+                <p style={{ fontSize: 14, color: "var(--color-text-secondary)" }}>
+                  Server not available. Load a file instead.
+                </p>
+              )}
+
+              {mode === "split" && (
+                <button
+                  disabled={pendingExps.length < 2}
+                  onClick={() => startLoading(pendingExps)}
+                  style={{
+                    padding: "11px 28px", borderRadius: "var(--border-radius-md)", fontSize: 16,
+                    border: "0.5px solid var(--color-border-secondary)", cursor: pendingExps.length < 2 ? "not-allowed" : "pointer",
+                    background: pendingExps.length < 2 ? "var(--color-background-secondary)" : "var(--color-background-primary)",
+                    color: pendingExps.length < 2 ? "var(--color-text-secondary)" : "var(--color-text-primary)",
+                    opacity: pendingExps.length < 2 ? 0.5 : 1,
+                    fontWeight: 500,
+                  }}
+                >
+                  Compare ▶
+                </button>
+              )}
+
+              {mode === "single" && (
+                <>
+                  <span style={{ fontSize: 13, color: "var(--color-text-secondary)", opacity: 0.5 }}>— or —</span>
+                  <label style={{ cursor: "pointer", padding: "11px 26px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", fontSize: 17, background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>
+                    Load from file
+                    <input type="file" accept=".jsonl,.gz" onChange={handleFile} style={{ display: "none" }} />
+                  </label>
+                </>
+              )}
+
+              {error && <p style={{ fontSize: 14, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
+            </>
+          )}
         </div>
       )}
 
-      {/* ── Visualizer ─────────────────────────────────────────────────── */}
-      {(data || data2) && (
+      {/* ══ Visualizer ════════════════════════════════════════════════════════ */}
+      {visualizerOpen && (
         <>
           <Header
-            fileName={fileName}
+            expNames={expNames}
             timeLabel={formatDisplayTime(
-              (data ?? data2).frames[frameIdx].t,
-              (data ?? data2).meta.t_min,
+              activeData.frames[frameIdx].t,
+              activeData.meta.t_min,
               showAbsoluteTime,
             )}
             showAbsoluteTime={showAbsoluteTime}
             onShowAbsoluteTimeChange={setShowAbsoluteTime}
             nodeCount={panel1.nodeCount || panel2.nodeCount}
             frameIdx={frameIdx}
-            frameCount={(data ?? data2).frames.length}
+            frameCount={activeData.frames.length}
             nodeSize={nodeSize}
             onNodeSizeChange={setNodeSize}
             speed={speed}
             onSpeedChange={setSpeed}
-            // per-panel buttons only visible in single-view (in split view they live in the panel header)
-            splitView={splitView}
-            sidebarTab={panel1.sidebarTab}
-            showPanel={panel1.showPanel}
-            selectedNodeCount={panel1.selectedNodes.size}
-            selectedMessage={panel1.selectedMessage}
-            hasMessages={panel1.hasMessages}
-            hasEncounters={panel1.hasEncounters}
-            onNodesBtn={panel1.handleNodesBtn}
-            onMessagesBtn={panel1.handleMessagesBtn}
-            onEncountersBtn={panel1.handleEncountersBtn}
-            showLegend={panel1.showLegend}
-            onToggleLegend={() => panel1.setShowLegend(v => !v)}
+            showLegend={showLegend}
+            onToggleLegend={() => setShowLegend(v => !v)}
             onHome={handleGoHome}
-            onToggleSplitView={toggleSplitView}
+            splitMode={mode === "split"}
           />
 
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            <VisualizerPanel
-              data={data}
-              panel={panel1}
-              frameIdx={frameIdx}
-              nodeSize={nodeSize}
-              showAbsoluteTime={showAbsoluteTime}
-              experimentName={fileName}
-              loadingExpData={loadingExpData}
-              splitView={splitView}
-              experiments={experiments}
-              onSelectExperiment={handleExperimentSelect}
-            />
-            {splitView && (
+            {/* Canvas area */}
+            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0 }}>
               <VisualizerPanel
-                data={data2}
-                panel={panel2}
+                data={data}
+                panel={panel1}
                 frameIdx={frameIdx}
                 nodeSize={nodeSize}
-                showAbsoluteTime={showAbsoluteTime}
-                experimentName={fileName2}
-                loadingExpData={loadingExpData2}
-                splitView={splitView}
-                experiments={experiments}
-                onSelectExperiment={handleExperiment2Select}
+                selection={selection}
               />
-            )}
+              {mode === "split" && (
+                <VisualizerPanel
+                  data={data2}
+                  panel={panel2}
+                  frameIdx={frameIdx}
+                  nodeSize={nodeSize}
+                  selection={selection}
+                />
+              )}
+            </div>
+
+            {/* Always-visible unified sidebar */}
+            <CombinedSidebar
+              data1={data}
+              data2={mode === "split" ? data2 : null}
+              expName1={fileName}
+              expName2={fileName2}
+              panel1={panel1}
+              panel2={mode === "split" ? panel2 : null}
+              frameIdx={frameIdx}
+              showAbsoluteTime={showAbsoluteTime}
+              selectedNodes={selectedNodes}
+              nodeColors={nodeColors}
+              selectedMessage={selectedMessage}
+              filterMode={filterMode}
+              showEncounters={showEncounters}
+              hideCarriers={hideCarriers}
+              sidebarTab={sidebarTab}
+              nodeSearch={nodeSearch}
+              msgSearch={msgSearch}
+              onlyDelivered={onlyDelivered}
+              encSearch={encSearch}
+              expandedEncGroupT={expandedEncGroupT}
+              setSidebarTab={setSidebarTab}
+              setNodeSearch={setNodeSearch}
+              setMsgSearch={setMsgSearch}
+              setOnlyDelivered={setOnlyDelivered}
+              setEncSearch={setEncSearch}
+              setExpandedEncGroupT={setExpandedEncGroupT}
+              setFilterMode={setFilterMode}
+              setShowEncounters={setShowEncounters}
+              setHideCarriers={setHideCarriers}
+              toggleNode={toggleNode}
+              setNodeColor={setNodeColor}
+              selectAllNodes={selectAllNodes}
+              clearNodes={clearNodes}
+              handleMessageClick={handleMessageClick}
+            />
           </div>
 
           <Timeline
             playing={playing}
             onTogglePlay={() => setPlaying(p => !p)}
-            frames={(data ?? data2).frames}
+            frames={activeData.frames}
             frameIdx={frameIdx}
             onScrub={onScrub}
-            showEncounters={showEncountersOnTimeline}
+            showEncounters={showEncounters}
             encounterTicks={combinedEncTicks}
-            transferTicks={combinedXferTicks}
-            deliveryFrameIdx={combinedDeliveryIdx}
+            transferTicks1={panel1.transferTicks}
+            transferTicks2={panel2.transferTicks}
+            deliveryFrameIdx1={panel1.deliveryFrameIdx}
+            deliveryFrameIdx2={panel2.deliveryFrameIdx}
             dayMarkers={dayMarkers}
-            tMin={(data ?? data2).meta.t_min}
+            tMin={activeData.meta.t_min}
             showAbsoluteTime={showAbsoluteTime}
           />
         </>

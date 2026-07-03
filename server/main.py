@@ -100,11 +100,11 @@ def load_experiment_data(experiment_name: str) -> dict:
     con = get_db()
     cur = con.cursor()
 
-    # encounters
+    # encounters are dataset-wide (all experiments share the same physical encounter set)
     cur.execute(
         "SELECT time, node1, node2, x, y, duration FROM encounters "
-        "WHERE experiment_name=? AND dataset_name=? ORDER BY time",
-        (experiment_name, DATASET),
+        "WHERE dataset_name=? ORDER BY time",
+        (DATASET,),
     )
     encounters = [
         {"t": int(r[0]), "n1": int(r[1]), "n2": int(r[2]),

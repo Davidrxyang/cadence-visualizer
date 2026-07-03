@@ -26,7 +26,7 @@ function TrianglePreview({ fill }) {
   );
 }
 
-export default function Legend({ show, onToggle }) {
+export default function Legend({ show, onToggle, splitMode }) {
   return (
     <div style={{ position: "relative" }}>
       <button onClick={onToggle} style={{
@@ -108,14 +108,45 @@ export default function Legend({ show, onToggle }) {
                 preview={<span style={{ fontSize: 10, color: "var(--color-text-secondary)" }}>"origin"</span>}
                 label="Label marking the message's origin node"
               />
-              <LegendRow
-                preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(59,130,246,0.9)" }} />}
-                label="Transfer tick on timeline"
-              />
-              <LegendRow
-                preview={<div style={{ width: 3, height: 14, borderRadius: 2, background: "#22c55e" }} />}
-                label="Delivery marker on timeline"
-              />
+              {!splitMode ? (
+                <>
+                  <LegendRow
+                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(59,130,246,0.9)" }} />}
+                    label="Transfer tick on timeline"
+                  />
+                  <LegendRow
+                    preview={<div style={{ width: 3, height: 14, borderRadius: 2, background: "#22c55e" }} />}
+                    label="Delivery marker on timeline"
+                  />
+                </>
+              ) : (
+                <>
+                  <LegendRow
+                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(59,130,246,0.9)" }} />}
+                    label="Exp 1 transfer tick on timeline (blue)"
+                  />
+                  <LegendRow
+                    preview={<div style={{ width: 3, height: 14, borderRadius: 2, background: "#3b82f6" }} />}
+                    label="Exp 1 delivery marker (blue)"
+                  />
+                  <LegendRow
+                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(249,115,22,0.9)" }} />}
+                    label="Exp 2 transfer tick on timeline (orange)"
+                  />
+                  <LegendRow
+                    preview={<div style={{ width: 3, height: 14, borderRadius: 2, background: "#f97316" }} />}
+                    label="Exp 2 delivery marker (orange)"
+                  />
+                  <LegendRow
+                    preview={<span style={{ fontSize: 11, color: "#3b82f6", fontWeight: 600 }}>✓</span>}
+                    label="Exp 1 delivered (blue in message list)"
+                  />
+                  <LegendRow
+                    preview={<span style={{ fontSize: 11, color: "#f97316", fontWeight: 600 }}>✓</span>}
+                    label="Exp 2 delivered (orange in message list)"
+                  />
+                </>
+              )}
             </div>
           </div>
         </div>

@@ -3,11 +3,29 @@ import { formatDisplayTime } from "../lib/parse";
 export default function Timeline({
   playing, onTogglePlay,
   frames, frameIdx, onScrub, tMin, showAbsoluteTime,
-  showEncounters, encounterTicks, transferTicks, deliveryFrameIdx, dayMarkers,
+  showEncounters, encounterTicks,
+  transferTicks1, transferTicks2,
+  deliveryFrameIdx1, deliveryFrameIdx2,
+  dayMarkers,
 }) {
   const lastIdx = frames.length - 1;
   const pct = (idx) => `${(idx / lastIdx) * 100}%`;
   const fmt = (t) => formatDisplayTime(t, tMin, showAbsoluteTime);
+
+  const EXP_COLORS = [
+    { rgb: [59, 130, 246], hex: "#3b82f6" },   // blue  — exp 1
+    { rgb: [249, 115, 22], hex: "#f97316" },    // orange — exp 2
+  ];
+
+  const xferRows = [
+    { ticks: transferTicks1 ?? new Set(), color: EXP_COLORS[0].rgb },
+    { ticks: transferTicks2 ?? new Set(), color: EXP_COLORS[1].rgb },
+  ].filter(r => r.ticks.size > 0);
+
+  const deliveryBars = [
+    { idx: deliveryFrameIdx1, color: EXP_COLORS[0], label: "Exp 1 delivery" },
+    { idx: deliveryFrameIdx2, color: EXP_COLORS[1], label: "Exp 2 delivery" },
+  ].filter(d => d.idx !== null && d.idx !== undefined);
 
   return (
     <div style={{
@@ -41,44 +59,49 @@ export default function Timeline({
             ))}
           </div>
         )}
-        {transferTicks.size > 0 && (
-          <div style={{ position: "relative", height: 8 }}>
-            {[...transferTicks].map(idx => (
+        {xferRows.map(({ ticks, color }, ri) => (
+          <div key={ri} style={{ position: "relative", height: 8 }}>
+            {[...ticks].map(idx => (
               <div key={idx} onClick={() => onScrub(idx)}
                 title={fmt(frames[idx].t)}
                 style={{
                   position: "absolute", cursor: "pointer",
                   left: pct(idx),
                   top: 1, width: 6, height: 6, borderRadius: 1, transform: "translateX(-50%)",
-                  background: idx === frameIdx ? "rgba(59,130,246,1)" : "rgba(59,130,246,0.65)",
+                  background: idx === frameIdx
+                    ? `rgba(${color.join(",")},1)`
+                    : `rgba(${color.join(",")},0.65)`,
                 }}
               />
             ))}
           </div>
-        )}
+        ))}
         <div style={{ position: "relative" }}>
           <input
             type="range" min={0} max={lastIdx} step={1} value={frameIdx}
             onChange={e => onScrub(Number(e.target.value))}
             style={{ width: "100%" }} aria-label="Timeline scrubber"
           />
-          {deliveryFrameIdx !== null && (
+          {deliveryBars.map(({ idx, color, label }) => (
             <div
-              onClick={() => onScrub(deliveryFrameIdx)}
-              title={`Delivered · ${fmt(frames[deliveryFrameIdx].t)}`}
+              key={label}
+              onClick={() => onScrub(idx)}
+              title={`${label} · ${fmt(frames[idx].t)}`}
               style={{
                 position: "absolute",
-                left: pct(deliveryFrameIdx),
+                left: pct(idx),
                 top: "50%", transform: "translate(-50%, -50%)",
                 width: 3, height: 18,
-                background: deliveryFrameIdx === frameIdx ? "#22c55e" : "rgba(34,197,94,0.85)",
+                background: idx === frameIdx
+                  ? `rgba(${color.rgb.join(",")},1)`
+                  : `rgba(${color.rgb.join(",")},0.85)`,
                 borderRadius: 2,
                 cursor: "pointer",
                 pointerEvents: "all",
                 zIndex: 2,
               }}
             />
-          )}
+          ))}
         </div>
         {dayMarkers.length > 0 && (
           <div style={{ position: "relative", height: 14 }}>

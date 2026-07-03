@@ -1,25 +1,29 @@
 import Legend from "./Legend";
 
 export default function Header({
-  fileName, timeLabel, showAbsoluteTime, onShowAbsoluteTimeChange, nodeCount, frameIdx, frameCount,
+  expNames, timeLabel, showAbsoluteTime, onShowAbsoluteTimeChange,
+  nodeCount, frameIdx, frameCount,
   nodeSize, onNodeSizeChange, speed, onSpeedChange,
-  splitView, sidebarTab, showPanel, selectedNodeCount, selectedMessage,
-  hasMessages, hasEncounters,
-  onNodesBtn, onMessagesBtn, onEncountersBtn,
-  showLegend, onToggleLegend, onHome, onToggleSplitView,
+  showLegend, onToggleLegend, onHome, splitMode,
 }) {
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 12, padding: "8px 12px",
-      borderBottom: "0.5px solid var(--color-border-tertiary)", flexWrap: "wrap"
+      borderBottom: "0.5px solid var(--color-border-tertiary)", flexWrap: "wrap",
+      flexShrink: 0,
     }}>
-      {fileName && (
-        <span style={{
-          fontSize: 13, color: "var(--color-text-primary)", fontWeight: 500,
-          maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-        }} title={fileName}>
-          {fileName}
-        </span>
+      {expNames && expNames.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {expNames.map((n, i) => (
+            <span key={i} style={{
+              fontSize: 13, fontWeight: 500,
+              color: i === 0 ? "#3b82f6" : "#f97316",
+              maxWidth: 340, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+            }} title={n}>
+              {n.replace(/^japan - /, "")}
+            </span>
+          ))}
+        </div>
       )}
       <span style={{ fontSize: 13, color: "var(--color-text-secondary)" }}>{timeLabel}</span>
       <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--color-text-secondary)", cursor: "pointer" }}>
@@ -40,48 +44,7 @@ export default function Header({
           onChange={e => onSpeedChange(Number(e.target.value))} style={{ width: 80 }} />
         <span style={{ minWidth: 28 }}>{speed}fps</span>
       </label>
-      {/* Per-panel buttons are only in the main header in single-view mode */}
-      {!splitView && (
-        <>
-          <button onClick={onNodesBtn} style={{
-            padding: "4px 10px", fontSize: 13, cursor: "pointer",
-            border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-            background: showPanel && sidebarTab === "nodes" ? "var(--color-text-secondary)" : "var(--color-background-secondary)",
-            color: showPanel && sidebarTab === "nodes" ? "var(--color-background-primary)" : "var(--color-text-secondary)"
-          }}>
-            Nodes{selectedNodeCount > 0 ? ` (${selectedNodeCount})` : ""}
-          </button>
-          {hasMessages && (
-            <button onClick={onMessagesBtn} style={{
-              padding: "4px 10px", fontSize: 13, cursor: "pointer",
-              border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-              background: showPanel && sidebarTab === "messages" ? "#3b82f6" : "var(--color-background-secondary)",
-              color: showPanel && sidebarTab === "messages" ? "#fff" : "var(--color-text-secondary)"
-            }}>
-              Messages{selectedMessage ? ` #${selectedMessage}` : ""}
-            </button>
-          )}
-          {hasEncounters && (
-            <button onClick={onEncountersBtn} style={{
-              padding: "4px 10px", fontSize: 13, cursor: "pointer",
-              border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-              background: showPanel && sidebarTab === "encounters" ? "#fbbf24" : "var(--color-background-secondary)",
-              color: showPanel && sidebarTab === "encounters" ? "#000" : "var(--color-text-secondary)"
-            }}>
-              Encounters
-            </button>
-          )}
-          <Legend show={showLegend} onToggle={onToggleLegend} />
-        </>
-      )}
-      <button onClick={onToggleSplitView} style={{
-        cursor: "pointer", fontSize: 12, padding: "4px 10px",
-        border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-        background: splitView ? "var(--color-text-secondary)" : "var(--color-background-secondary)",
-        color: splitView ? "var(--color-background-primary)" : "var(--color-text-secondary)",
-      }}>
-        {splitView ? "Single" : "Split"}
-      </button>
+      <Legend show={showLegend} onToggle={onToggleLegend} splitMode={splitMode} />
       <button onClick={onHome} style={{
         cursor: "pointer", fontSize: 12, padding: "4px 10px",
         border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
