@@ -35,6 +35,7 @@ def export(
     col_y: str = "y",
     bucket_seconds: int = 30,
     experiment: str = "mirage",
+    messages_file: str | None = None,
 ):
     print(f"Connecting to {db_path} ...")
     con = sqlite3.connect(db_path)
@@ -94,10 +95,33 @@ def export(
     except Exception as e:
         print(f"No encounters exported: {e}")
 
+    # --- message origins from raw messages file ---
+    # msg_origins is keyed by message ID and is the same for every experiment:
+    # all messages were created before any experiment ran. We load from the raw
+    # JSON file so that messages never transferred in a given experiment still
+    # appear in the visualizer (with zero transfers, shown as "in transit").
+    msg_origins = {}
+    if messages_file:
+        try:
+            with open(messages_file, encoding="utf-8") as mf:
+                raw_msgs = json.load(mf)
+            for sender_msgs in raw_msgs.values():
+                for m in sender_msgs:
+                    mid = str(m["id"])
+                    msg_origins[mid] = {
+                        "__msgorigin__": True,
+                        "id": mid,
+                        "origin": int(m["sender"]),
+                        "created": int(m["time"]),
+                        "dest": int(m["destination"]),
+                    }
+            print(f"Message origins loaded from file: {len(msg_origins):,}")
+        except Exception as e:
+            print(f"Could not load messages file, falling back to DB: {e}")
+
     # --- message transfers (filtered by experiment) ---
     # Deduplicate: keep only the earliest transfer_time per (msg_id, receiver).
     # A node becomes a carrier the first time it receives a message; re-transmissions are irrelevant.
-    msg_origins = {}  # msg_id -> origin record
     first_recv = {}   # (msg_id, receiver) -> (earliest_t, sender)
     try:
         print(f"Filtering message transfers by experiment LIKE '%{experiment}%' ...")
@@ -113,6 +137,7 @@ def export(
             msg_id, sender, receiver, t_xfer, t_created, dest, path = row
             msg_id = str(msg_id)
             raw_count += 1
+            # Fall back to DB for origin if the messages file wasn't provided
             if msg_id not in msg_origins and path:
                 try:
                     origin_node = int(str(path).split(':')[0].strip())
@@ -214,6 +239,7 @@ def main():
     parser.add_argument("--col-y",      default="y",         help="Y coordinate column name (default: y)")
     parser.add_argument("--bucket",     default=30, type=int,  help="Bucket size in seconds (default: 30)")
     parser.add_argument("--experiment", default="mirage",      help="Experiment name filter (LIKE match, default: mirage)")
+    parser.add_argument("--messages",   default=None,          help="Path to raw messages JSON file (ensures all messages appear regardless of transfer status)")
     args = parser.parse_args()
 
     export(
@@ -226,6 +252,7 @@ def main():
         col_y=args.col_y,
         bucket_seconds=args.bucket,
         experiment=args.experiment,
+        messages_file=args.messages,
     )
 
 

@@ -8,6 +8,7 @@ Run:
     uvicorn main:app --reload
 """
 
+import json
 import sqlite3
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -17,12 +18,34 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 DB_PATH = str(Path(__file__).parent.parent / "db" / "japan.db")
+MESSAGES_PATH = Path(__file__).parent.parent / "messages" / "messages_japan_type_3.json"
 DATASET = "japan"
 
 # In-memory caches — populated on first request, reused for the server's lifetime
 _frames_cache: list | None = None
 _meta_cache: dict | None = None
 _exp_cache: dict[str, dict] = {}
+
+# Canonical message registry — same for every experiment.
+# Keys are message IDs (strings); values match the messageOrigins shape expected by the frontend.
+_message_registry: dict[str, dict] = {}
+
+def _load_message_registry() -> dict[str, dict]:
+    if not MESSAGES_PATH.exists():
+        return {}
+    with MESSAGES_PATH.open() as f:
+        raw = json.load(f)
+    registry: dict[str, dict] = {}
+    for msgs in raw.values():
+        for m in msgs:
+            mid = str(m["id"])
+            registry[mid] = {
+                "id": mid,
+                "origin": int(m["sender"]),
+                "created": int(m["time"]),
+                "dest": int(m["destination"]),
+            }
+    return registry
 
 
 def get_db() -> sqlite3.Connection:
@@ -89,25 +112,12 @@ def load_experiment_data(experiment_name: str) -> dict:
         for r in cur.fetchall()
     ]
 
-    # message origins — one row per message_id (creation_time/destination/path are
-    # identical across all transfers of the same message, so GROUP BY is safe here)
-    msg_origins: dict[str, dict] = {}
-    cur.execute(
-        "SELECT message_id, MIN(creation_time), destination, path "
-        "FROM message_dbs WHERE experiment_name=? AND path IS NOT NULL AND path != '' "
-        "GROUP BY message_id",
-        (experiment_name,),
-    )
-    for msg_id, t_created, dest, path in cur.fetchall():
-        msg_id = str(msg_id)
-        try:
-            origin_node = int(str(path).split(":")[0].strip())
-            msg_origins[msg_id] = {
-                "id": msg_id, "origin": origin_node,
-                "created": int(float(t_created)), "dest": int(float(dest)),
-            }
-        except (ValueError, IndexError):
-            pass
+    # Message origins come from the canonical raw messages file, not from message_dbs.
+    # message_dbs only records transfers that actually happened, so messages that were
+    # created but never transferred in this experiment would be invisible if we derived
+    # origins from that table. All 4500 messages exist in every experiment — only their
+    # transfer/delivery outcomes differ.
+    msg_origins: dict[str, dict] = dict(_message_registry)
 
     # message transfers — deduplicate to earliest transfer per (msg_id, receiver) in SQL
     # sender_node in a GROUP BY is SQLite's arbitrary pick from the group; for our
@@ -182,6 +192,10 @@ async def lifespan(app: FastAPI):
     )
     con.commit()
     con.close()
+    # Load canonical message list from the raw JSON file
+    global _message_registry
+    _message_registry = _load_message_registry()
+    print(f"Message registry loaded: {len(_message_registry)} messages")
     # Pre-warm the frame cache so the first /api/frames request is instant
     load_shared_data()
     yield
