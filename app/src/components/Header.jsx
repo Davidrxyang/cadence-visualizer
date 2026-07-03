@@ -3,10 +3,10 @@ import Legend from "./Legend";
 export default function Header({
   fileName, timeLabel, showAbsoluteTime, onShowAbsoluteTimeChange, nodeCount, frameIdx, frameCount,
   nodeSize, onNodeSizeChange, speed, onSpeedChange,
-  sidebarTab, showPanel, selectedNodeCount, selectedMessage,
+  splitView, sidebarTab, showPanel, selectedNodeCount, selectedMessage,
   hasMessages, hasEncounters,
   onNodesBtn, onMessagesBtn, onEncountersBtn,
-  showLegend, onToggleLegend, onHome,
+  showLegend, onToggleLegend, onHome, onToggleSplitView,
 }) {
   return (
     <div style={{
@@ -40,35 +40,48 @@ export default function Header({
           onChange={e => onSpeedChange(Number(e.target.value))} style={{ width: 80 }} />
         <span style={{ minWidth: 28 }}>{speed}fps</span>
       </label>
-      <button onClick={onNodesBtn} style={{
-        padding: "4px 10px", fontSize: 13, cursor: "pointer",
+      {/* Per-panel buttons are only in the main header in single-view mode */}
+      {!splitView && (
+        <>
+          <button onClick={onNodesBtn} style={{
+            padding: "4px 10px", fontSize: 13, cursor: "pointer",
+            border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+            background: showPanel && sidebarTab === "nodes" ? "var(--color-text-secondary)" : "var(--color-background-secondary)",
+            color: showPanel && sidebarTab === "nodes" ? "var(--color-background-primary)" : "var(--color-text-secondary)"
+          }}>
+            Nodes{selectedNodeCount > 0 ? ` (${selectedNodeCount})` : ""}
+          </button>
+          {hasMessages && (
+            <button onClick={onMessagesBtn} style={{
+              padding: "4px 10px", fontSize: 13, cursor: "pointer",
+              border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+              background: showPanel && sidebarTab === "messages" ? "#3b82f6" : "var(--color-background-secondary)",
+              color: showPanel && sidebarTab === "messages" ? "#fff" : "var(--color-text-secondary)"
+            }}>
+              Messages{selectedMessage ? ` #${selectedMessage}` : ""}
+            </button>
+          )}
+          {hasEncounters && (
+            <button onClick={onEncountersBtn} style={{
+              padding: "4px 10px", fontSize: 13, cursor: "pointer",
+              border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
+              background: showPanel && sidebarTab === "encounters" ? "#fbbf24" : "var(--color-background-secondary)",
+              color: showPanel && sidebarTab === "encounters" ? "#000" : "var(--color-text-secondary)"
+            }}>
+              Encounters
+            </button>
+          )}
+          <Legend show={showLegend} onToggle={onToggleLegend} />
+        </>
+      )}
+      <button onClick={onToggleSplitView} style={{
+        cursor: "pointer", fontSize: 12, padding: "4px 10px",
         border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-        background: showPanel && sidebarTab === "nodes" ? "var(--color-text-secondary)" : "var(--color-background-secondary)",
-        color: showPanel && sidebarTab === "nodes" ? "var(--color-background-primary)" : "var(--color-text-secondary)"
+        background: splitView ? "var(--color-text-secondary)" : "var(--color-background-secondary)",
+        color: splitView ? "var(--color-background-primary)" : "var(--color-text-secondary)",
       }}>
-        Nodes{selectedNodeCount > 0 ? ` (${selectedNodeCount})` : ""}
+        {splitView ? "Single" : "Split"}
       </button>
-      {hasMessages && (
-        <button onClick={onMessagesBtn} style={{
-          padding: "4px 10px", fontSize: 13, cursor: "pointer",
-          border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-          background: showPanel && sidebarTab === "messages" ? "#3b82f6" : "var(--color-background-secondary)",
-          color: showPanel && sidebarTab === "messages" ? "#fff" : "var(--color-text-secondary)"
-        }}>
-          Messages{selectedMessage ? ` #${selectedMessage}` : ""}
-        </button>
-      )}
-      {hasEncounters && (
-        <button onClick={onEncountersBtn} style={{
-          padding: "4px 10px", fontSize: 13, cursor: "pointer",
-          border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",
-          background: showPanel && sidebarTab === "encounters" ? "#fbbf24" : "var(--color-background-secondary)",
-          color: showPanel && sidebarTab === "encounters" ? "#000" : "var(--color-text-secondary)"
-        }}>
-          Encounters
-        </button>
-      )}
-      <Legend show={showLegend} onToggle={onToggleLegend} />
       <button onClick={onHome} style={{
         cursor: "pointer", fontSize: 12, padding: "4px 10px",
         border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)",

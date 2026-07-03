@@ -1,59 +1,41 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { DEFAULT_NODE_RADIUS, MAX_SELECTED_NODES, ENCOUNTER_BUCKET_SECONDS } from "./lib/constants";
-import { NODE_COLOR_PALETTE } from "./lib/colors";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { DEFAULT_NODE_RADIUS } from "./lib/constants";
 import { parseJSONL, parseAPIFrames, formatDisplayTime } from "./lib/parse";
-import { renderFrame } from "./lib/canvasDraw";
+import { useVisualizerPanel } from "./hooks/useVisualizerPanel";
 import Header from "./components/Header";
-import NodesPanel from "./components/NodesPanel";
-import MessagesPanel from "./components/MessagesPanel";
-import EncountersPanel from "./components/EncountersPanel";
+import VisualizerPanel from "./components/VisualizerPanel";
 import Timeline from "./components/Timeline";
-import EncounterPopup from "./components/EncounterPopup";
 
 export default function App() {
-  const [data, setData] = useState(null);
+  // ── shared playback state ─────────────────────────────────────────────────
   const [frameIdx, setFrameIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(5);
   const [nodeSize, setNodeSize] = useState(DEFAULT_NODE_RADIUS);
+  const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
+  const [splitView, setSplitView] = useState(false);
+
+  // ── panel 1 data ──────────────────────────────────────────────────────────
+  const [data, setData] = useState(null);
+  const [fileName, setFileName] = useState(null);
+  const [loadingExpData, setLoadingExpData] = useState(false);
+  const activeExpRef = useRef(null);
+
+  // ── panel 2 data ──────────────────────────────────────────────────────────
+  const [data2, setData2] = useState(null);
+  const [fileName2, setFileName2] = useState(null);
+  const [loadingExpData2, setLoadingExpData2] = useState(false);
+  const activeExp2Ref = useRef(null);
+
+  // ── loading / error ───────────────────────────────────────────────────────
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState("");
-  const [fileName, setFileName] = useState(null);
-  const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
 
-  // API-backed experiment selector
+  // ── API experiment list ───────────────────────────────────────────────────
   const [experiments, setExperiments] = useState(null);
   const [serverAvailable, setServerAvailable] = useState(null);
-  const [loadingExpData, setLoadingExpData] = useState(false);
 
-  const [selectedNodes, setSelectedNodes] = useState(new Set());
-  const [nodeColors, setNodeColors] = useState({});
-  const [filterMode, setFilterMode] = useState("highlight");
-  const [showPanel, setShowPanel] = useState(false);
-  const [showLegend, setShowLegend] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState("nodes");
-  const [nodeSearch, setNodeSearch] = useState("");
-  const [showEncounters, setShowEncounters] = useState(true);
-
-  const [selectedMessage, setSelectedMessage] = useState(null);
-  const [msgSearch, setMsgSearch] = useState("");
-  const [onlyDelivered, setOnlyDelivered] = useState(false);
-  const [hideCarriers, setHideCarriers] = useState(false);
-
-  const [encSearch, setEncSearch] = useState("");
-  const [expandedEncGroupT, setExpandedEncGroupT] = useState(null);
-  const [encounterPopup, setEncounterPopup] = useState(null);
-
-  const [clickedNode, setClickedNode] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-
-  const canvasRef = useRef(null);
-  const animRef = useRef(null);
-  const lastTickRef = useRef(null);
-  const activeExpRef = useRef(null); // guards against stale phase-2 responses
-
-  // Check if the backend API is running on mount
   useEffect(() => {
     fetch("/api/experiments")
       .then(r => r.json())
@@ -61,188 +43,19 @@ export default function App() {
       .catch(() => setServerAvailable(false));
   }, []);
 
-  // ── derived from data ─────────────────────────────────────────────────────
+  // ── shared scrub callback (also stops playback) ───────────────────────────
+  const onScrub = (idx) => { setPlaying(false); setFrameIdx(idx); };
 
-  const allNodeIds = useMemo(() => {
-    if (!data) return [];
-    return Array.from({ length: data.meta.node_count }, (_, i) => i);
-  }, [data]);
+  // ── per-panel hook instances ───────────────────────────────────────────────
+  const panel1 = useVisualizerPanel(data, frameIdx, showAbsoluteTime, onScrub);
+  const panel2 = useVisualizerPanel(data2, frameIdx, showAbsoluteTime, onScrub);
 
-  const filteredNodeIds = useMemo(() => {
-    const q = nodeSearch.trim();
-    if (!q) return allNodeIds;
-    return allNodeIds.filter(id => String(id).includes(q));
-  }, [allNodeIds, nodeSearch]);
-
-  const allMessageIds = useMemo(() => {
-    if (!data?.transfers) return [];
-    return Object.keys(data.transfers).sort((a, b) => Number(a) - Number(b));
-  }, [data]);
-
-  const filteredMessageIds = useMemo(() => {
-    let ids = allMessageIds;
-    if (onlyDelivered) ids = ids.filter(id => data?.deliveredPaths[id] !== undefined);
-    const q = msgSearch.trim();
-    if (!q) return ids;
-    return ids.filter(id => id.includes(q));
-  }, [allMessageIds, msgSearch, onlyDelivered, data]);
-
-  const frameIdxMap = useMemo(() => {
-    if (!data) return new Map();
-    return new Map(data.frames.map((f, i) => [f.t, i]));
-  }, [data]);
-
-  const encountersByNode = useMemo(() => {
-    if (!data?.encounters.length) return {};
-    const map = {};
-    for (const enc of data.encounters) {
-      (map[enc.n1] ??= []).push(enc);
-      (map[enc.n2] ??= []).push(enc);
-    }
-    return map;
-  }, [data]);
-
-  const encounterTicks = useMemo(() => {
-    if (!data?.encounters.length || !selectedNodes.size) return new Set();
-    const { bucket } = data.meta;
-    const ticks = new Set();
-    for (const nodeId of selectedNodes) {
-      for (const enc of (encountersByNode[nodeId] ?? [])) {
-        const tStart = Math.floor(enc.t / bucket) * bucket;
-        for (let t = tStart; t < enc.t + enc.dur; t += bucket) {
-          const idx = frameIdxMap.get(t);
-          if (idx !== undefined) ticks.add(idx);
-        }
-      }
-    }
-    return ticks;
-  }, [data, selectedNodes, encountersByNode, frameIdxMap]);
-
-  const currentEncounters = useMemo(() => {
-    if (!data?.encounters.length || !selectedNodes.size) return [];
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return [];
-    const seen = new Set();
-    const result = [];
-    for (const nodeId of selectedNodes) {
-      for (const enc of (encountersByNode[nodeId] ?? [])) {
-        if (frameT < enc.t || frameT >= enc.t + enc.dur) continue;
-        const key = `${enc.t}-${enc.n1}-${enc.n2}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        result.push(enc);
-      }
-    }
-    return result;
-  }, [data, frameIdx, selectedNodes, encountersByNode]);
-
-  // flat index of all message transfers (across every message) keyed by node pair,
-  // so a given encounter's two nodes can be looked up directly without scanning every message
-  const transfersByNodePair = useMemo(() => {
-    if (!data?.transfers) return {};
-    const map = {};
-    for (const msgId of Object.keys(data.transfers)) {
-      for (const xfer of data.transfers[msgId]) {
-        const key = xfer.from < xfer.to ? `${xfer.from}-${xfer.to}` : `${xfer.to}-${xfer.from}`;
-        (map[key] ??= []).push(xfer);
-      }
-    }
-    return map;
-  }, [data]);
-
-  const getMessagesForEncounter = (enc) => {
-    const key = enc.n1 < enc.n2 ? `${enc.n1}-${enc.n2}` : `${enc.n2}-${enc.n1}`;
-    const candidates = transfersByNodePair[key] ?? [];
-    return candidates.filter(x => x.t >= enc.t && x.t < enc.t + enc.dur);
-  };
-
-  // Encounters grouped into 1-hour buckets for the browsable Encounters menu.
-  // Grouping by exact timestamp produced one row per encounter (tens of thousands),
-  // which was far too slow to render/filter — wide buckets keep the group count small.
-  const encounterGroups = useMemo(() => {
-    if (!data?.encounters.length) return [];
-    const map = {};
-    for (const enc of data.encounters) {
-      const bucket = Math.floor(enc.t / ENCOUNTER_BUCKET_SECONDS) * ENCOUNTER_BUCKET_SECONDS;
-      (map[bucket] ??= []).push(enc);
-    }
-    return Object.keys(map).map(Number).sort((a, b) => a - b).map(t => ({ t, encounters: map[t] }));
-  }, [data]);
-
-  const filteredEncounterGroups = useMemo(() => {
-    const q = encSearch.trim().toLowerCase();
-    if (!q || !data) return encounterGroups;
-    return encounterGroups.filter(g =>
-      formatDisplayTime(g.t, data.meta.t_min, showAbsoluteTime).toLowerCase().includes(q) || String(g.t).includes(q)
-    );
-  }, [encounterGroups, encSearch, data, showAbsoluteTime]);
-
-  const carriers = useMemo(() => {
-    if (!selectedMessage || !data) return new Set();
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return new Set();
-    const origin = data.messageOrigins[selectedMessage]?.origin;
-    const result = new Set(origin != null ? [origin] : []);
-    for (const xfer of (data.transfers[selectedMessage] ?? [])) {
-      if (xfer.t > frameT) break;
-      result.add(xfer.to);
-    }
-    return result;
-  }, [selectedMessage, frameIdx, data]);
-
-  const transferTicks = useMemo(() => {
-    if (!selectedMessage || !data?.transfers[selectedMessage]) return new Set();
-    const { bucket } = data.meta;
-    const ticks = new Set();
-    for (const xfer of data.transfers[selectedMessage]) {
-      const bucketed = Math.floor(xfer.t / bucket) * bucket;
-      const idx = frameIdxMap.get(bucketed);
-      if (idx !== undefined) ticks.add(idx);
-    }
-    return ticks;
-  }, [selectedMessage, data, frameIdxMap]);
-
-  const deliveryFrameIdx = useMemo(() => {
-    if (!selectedMessage || !data) return null;
-    const dest = data.messageOrigins[selectedMessage]?.dest;
-    if (dest == null) return null;
-    const { bucket } = data.meta;
-    for (const xfer of (data.transfers[selectedMessage] ?? [])) {
-      if (xfer.to === dest) {
-        const bucketed = Math.floor(xfer.t / bucket) * bucket;
-        const exact = frameIdxMap.get(bucketed);
-        if (exact !== undefined) return exact;
-        // no frame at that exact bucket — binary search for nearest frame before delivery
-        const frames = data.frames;
-        let lo = 0, hi = frames.length - 1, best = 0;
-        while (lo <= hi) {
-          const mid = (lo + hi) >> 1;
-          if (frames[mid].t <= bucketed) { best = mid; lo = mid + 1; }
-          else hi = mid - 1;
-        }
-        return best;
-      }
-    }
-    return null;
-  }, [selectedMessage, data, frameIdxMap]);
-
-  // hop count + end-to-end latency for a delivered message
-  const deliveryMetrics = useMemo(() => {
-    if (!selectedMessage || !data) return null;
-    const dest = data.messageOrigins[selectedMessage]?.dest;
-    const created = data.messageOrigins[selectedMessage]?.created;
-    if (dest == null || created == null) return null;
-    const deliverXfer = (data.transfers[selectedMessage] ?? []).find(x => x.to === dest);
-    if (!deliverXfer) return null;
-    const path = data.deliveredPaths[selectedMessage];
-    return { hops: path ? path.length - 1 : null, latencySeconds: deliverXfer.t - created };
-  }, [selectedMessage, data]);
-
-  // frame index nearest each 5-day mark since the experiment's first frame, for the scrubber
+  // ── day markers (shared — same frames for all experiments) ────────────────
   const dayMarkers = useMemo(() => {
-    if (!data) return [];
-    const { t_min, t_max } = data.meta;
-    const frames = data.frames;
+    const d = data ?? data2;
+    if (!d) return [];
+    const { t_min, t_max } = d.meta;
+    const frames = d.frames;
     const totalDays = Math.floor((t_max - t_min) / 86400);
     const markers = [];
     for (let day = 5; day <= totalDays; day += 5) {
@@ -256,9 +69,88 @@ export default function App() {
       markers.push({ idx: best, day });
     }
     return markers;
-  }, [data]);
+  }, [data, data2]);
 
-  // ── file loading ──────────────────────────────────────────────────────────
+  // ── animation loop ────────────────────────────────────────────────────────
+  const animRef = useRef(null);
+  const lastTickRef = useRef(null);
+  const activeData = data ?? data2;
+
+  useEffect(() => {
+    if (!playing || !activeData) return;
+    const tick = (now) => {
+      if (lastTickRef.current === null) lastTickRef.current = now;
+      const elapsed = now - lastTickRef.current;
+      if (elapsed >= 1000 / speed) {
+        lastTickRef.current = now;
+        setFrameIdx(i => {
+          if (i >= activeData.frames.length - 1) { setPlaying(false); return i; }
+          return i + 1;
+        });
+      }
+      animRef.current = requestAnimationFrame(tick);
+    };
+    animRef.current = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(animRef.current); lastTickRef.current = null; };
+  }, [playing, activeData, speed]);
+
+  // ── loading helpers ───────────────────────────────────────────────────────
+
+  const resetVisualizerState = () => {
+    setFrameIdx(0);
+    setPlaying(false);
+    panel1.reset();
+  };
+
+  // Fetch just meta + frames (phase 1). Returns { meta, frames } or throws.
+  const fetchFrames = async () => {
+    const [metaRes, framesRes] = await Promise.all([
+      fetch("/api/meta"),
+      fetch("/api/frames"),
+    ]);
+    if (!metaRes.ok) throw new Error(`Meta fetch failed: ${metaRes.status}`);
+    if (!framesRes.ok) throw new Error(`Frames fetch failed: ${framesRes.status}`);
+    const [metaData, framesData] = await Promise.all([metaRes.json(), framesRes.json()]);
+    const frames = parseAPIFrames(framesData.frames);
+    if (!frames.length) throw new Error("No frames returned from API.");
+    return { meta: metaData, frames };
+  };
+
+  // Fetch experiment-specific data (encounters + messages). Returns exp fields or throws.
+  const fetchExpData = async (name) => {
+    const res = await fetch(`/api/experiment-data/${encodeURIComponent(name)}`);
+    if (!res.ok) throw new Error(`Experiment data fetch failed: ${res.status}`);
+    return res.json();
+  };
+
+  // ── panel 1 experiment select ─────────────────────────────────────────────
+
+  const handleExperimentSelect = async (name) => {
+    activeExpRef.current = name;
+    setLoading(true);
+    setError(null);
+    setLoadingStatus("Loading frames…");
+    try {
+      const { meta, frames } = await fetchFrames();
+      setData({ meta, frames, encounters: [], messageOrigins: {}, transfers: {}, deliveredPaths: {} });
+      setFileName(name);
+      resetVisualizerState();
+      setLoading(false);
+      setLoadingStatus("");
+
+      setLoadingExpData(true);
+      const expData = await fetchExpData(name);
+      if (activeExpRef.current === name) {
+        setData(prev => prev ? { ...prev, ...expData } : prev);
+      }
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+      setLoadingStatus("");
+    } finally {
+      if (activeExpRef.current === name) setLoadingExpData(false);
+    }
+  };
 
   const handleFile = async (e) => {
     const file = e.target.files[0];
@@ -290,299 +182,76 @@ export default function App() {
     }
   };
 
-  const resetVisualizerState = () => {
-    setFrameIdx(0);
-    setPlaying(false);
-    setSelectedNodes(new Set());
-    setNodeColors({});
-    setSelectedMessage(null);
-    setOnlyDelivered(false);
-    setClickedNode(null);
-    setEncSearch("");
-    setExpandedEncGroupT(null);
-    setEncounterPopup(null);
-  };
+  // ── panel 2 experiment select ─────────────────────────────────────────────
 
-  const handleExperimentSelect = async (name) => {
-    activeExpRef.current = name;
-    setLoading(true);
-    setError(null);
-    setLoadingStatus("Loading frames…");
+  const handleExperiment2Select = async (name) => {
+    activeExp2Ref.current = name;
+    panel2.reset();
     try {
-      // Phase 1: fetch meta + frames (~2s) — show the canvas immediately
-      const [metaRes, framesRes] = await Promise.all([
-        fetch("/api/meta"),
-        fetch("/api/frames"),
-      ]);
-      if (!metaRes.ok) throw new Error(`Meta fetch failed: ${metaRes.status}`);
-      if (!framesRes.ok) throw new Error(`Frames fetch failed: ${framesRes.status}`);
-      const [metaData, framesData] = await Promise.all([metaRes.json(), framesRes.json()]);
-      const frames = parseAPIFrames(framesData.frames);
-      if (!frames.length) throw new Error("No frames returned from API.");
+      // Reuse already-loaded meta + frames from panel 1 (same dataset)
+      const baseFrames = data
+        ? { meta: data.meta, frames: data.frames }
+        : await fetchFrames();
 
-      setData({ meta: metaData, frames, encounters: [], messageOrigins: {}, transfers: {}, deliveredPaths: {} });
-      setFileName(name);
-      resetVisualizerState();
-      setLoading(false);
-      setLoadingStatus("");
+      setData2({ ...baseFrames, encounters: [], messageOrigins: {}, transfers: {}, deliveredPaths: {} });
+      setFileName2(name);
 
-      // Phase 2: fetch experiment-specific data in the background (~10-20s)
-      // The canvas is already live; messages/encounters populate when ready.
-      setLoadingExpData(true);
-      const expRes = await fetch(`/api/experiment-data/${encodeURIComponent(name)}`);
-      if (!expRes.ok) throw new Error(`Experiment data fetch failed: ${expRes.status}`);
-      const expData = await expRes.json();
-      // Only apply if the user hasn't switched to a different experiment
-      if (activeExpRef.current === name) {
-        setData(prev => prev ? { ...prev, ...expData } : prev);
+      setLoadingExpData2(true);
+      const expData = await fetchExpData(name);
+      if (activeExp2Ref.current === name) {
+        setData2(prev => prev ? { ...prev, ...expData } : prev);
       }
     } catch (err) {
       setError(err.message);
-      setLoading(false);
-      setLoadingStatus("");
     } finally {
-      if (activeExpRef.current === name) setLoadingExpData(false);
+      if (activeExp2Ref.current === name) setLoadingExpData2(false);
     }
   };
+
+  // ── home ──────────────────────────────────────────────────────────────────
 
   const handleGoHome = () => {
-    setData(null);
-    setFileName(null);
-    setError(null);
-    setFrameIdx(0);
-    setPlaying(false);
-    setSelectedNodes(new Set());
-    setNodeColors({});
-    setSelectedMessage(null);
-    setOnlyDelivered(false);
-    setClickedNode(null);
-    setShowPanel(false);
-    setShowLegend(false);
-    setSidebarTab("nodes");
-    setEncSearch("");
-    setExpandedEncGroupT(null);
-    setEncounterPopup(null);
-    setLoadingExpData(false);
+    setData(null); setFileName(null); setLoadingExpData(false);
+    setData2(null); setFileName2(null); setLoadingExpData2(false);
+    setError(null); setFrameIdx(0); setPlaying(false);
+    setSplitView(false);
+    activeExpRef.current = null;
+    activeExp2Ref.current = null;
+    panel1.reset();
+    panel2.reset();
   };
 
-  const toggleNode = (id) => {
-    if (selectedNodes.has(id)) {
-      const next = new Set(selectedNodes);
-      next.delete(id);
-      setSelectedNodes(next);
-      return;
-    }
-    if (selectedNodes.size >= MAX_SELECTED_NODES) return;
-    const next = new Set(selectedNodes);
-    next.add(id);
-    setSelectedNodes(next);
-    if (!nodeColors[id]) {
-      setNodeColors(prev => ({ ...prev, [id]: NODE_COLOR_PALETTE[(next.size - 1) % NODE_COLOR_PALETTE.length] }));
-    }
-  };
-
-  const setNodeColor = (id, color) => {
-    setNodeColors(prev => ({ ...prev, [id]: color }));
-  };
-
-  const selectAllNodes = () => {
-    const ids = filteredNodeIds.slice(0, MAX_SELECTED_NODES);
-    setSelectedNodes(new Set(ids));
-    setNodeColors(prev => {
-      const next = { ...prev };
-      ids.forEach((id, i) => { if (!next[id]) next[id] = NODE_COLOR_PALETTE[i % NODE_COLOR_PALETTE.length]; });
-      return next;
+  const toggleSplitView = () => {
+    setSplitView(v => {
+      if (!v) return true; // opening split — panel 2 starts empty
+      setData2(null); setFileName2(null); setLoadingExpData2(false);
+      activeExp2Ref.current = null;
+      panel2.reset();
+      return false;
     });
   };
-
-  const clearNodes = () => {
-    setSelectedNodes(new Set());
-    setNodeColors({});
-  };
-
-  // Focus only the nodes that were part of a delivered message's hop path,
-  // deselecting everything else and assigning each a distinct color.
-  const focusOnPathNodes = (pathNodeIds) => {
-    const ids = pathNodeIds.slice(0, MAX_SELECTED_NODES);
-    setSelectedNodes(new Set(ids));
-    setNodeColors(() => {
-      const next = {};
-      ids.forEach((id, i) => { next[id] = NODE_COLOR_PALETTE[i % NODE_COLOR_PALETTE.length]; });
-      return next;
-    });
-  };
-
-  // Nodes "relevant" to a message: its delivered path if it has one, otherwise
-  // the origin plus every node the message has been handed off to so far.
-  const getRelevantNodesForMessage = (msgId) => {
-    const path = data.deliveredPaths[msgId];
-    if (path) return path;
-    const origin = data.messageOrigins[msgId]?.origin;
-    const ids = [];
-    const seen = new Set();
-    if (origin !== undefined) { ids.push(origin); seen.add(origin); }
-    for (const xfer of (data.transfers[msgId] ?? [])) {
-      if (!seen.has(xfer.to)) { seen.add(xfer.to); ids.push(xfer.to); }
-    }
-    return ids;
-  };
-
-  const handleMessageClick = (id) => {
-    setSelectedMessage(prev => {
-      const next = prev === id ? null : id;
-      if (next !== null) {
-        const nodes = getRelevantNodesForMessage(next);
-        if (nodes.length) focusOnPathNodes(nodes);
-      }
-      return next;
-    });
-  };
-
-  // jump the scrubber to the frame nearest a given timestamp (falls back to the
-  // last frame at or before it, since exact buckets can have gaps in the data)
-  const findFrameIdxForTime = (t) => {
-    if (!data) return null;
-    const { bucket } = data.meta;
-    const bucketed = Math.floor(t / bucket) * bucket;
-    const exact = frameIdxMap.get(bucketed);
-    if (exact !== undefined) return exact;
-    const frames = data.frames;
-    let lo = 0, hi = frames.length - 1, best = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (frames[mid].t <= bucketed) { best = mid; lo = mid + 1; }
-      else hi = mid - 1;
-    }
-    return best;
-  };
-
-  const openEncounterPopup = (enc) => {
-    setEncounterPopup(enc);
-    const idx = findFrameIdxForTime(enc.t);
-    if (idx !== null) { setPlaying(false); setFrameIdx(idx); }
-  };
-
-  const handlePopupMessageClick = (msgId) => {
-    setEncounterPopup(null);
-    setShowPanel(true);
-    setSidebarTab("messages");
-    handleMessageClick(msgId);
-  };
-
-  // ── canvas click ──────────────────────────────────────────────────────────
-
-  const handleCanvasClick = useCallback((e) => {
-    if (!data || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const { meta, frames } = data;
-    const W = canvas.width;
-    const H = canvas.height;
-    const toScreen = (x, y) => [
-      ((x - meta.x_min) / (meta.x_max - meta.x_min)) * (W - 40) + 20,
-      H - (((y - meta.y_min) / (meta.y_max - meta.y_min)) * (H - 40) + 20),
-    ];
-    const frame = frames[frameIdx];
-    let closest = null;
-    let closestDist = 10;
-    for (const [idStr, [x, y]] of Object.entries(frame.nodes)) {
-      const id = parseInt(idStr);
-      if (filterMode === "isolate" && selectedNodes.size > 0 && !selectedNodes.has(id)) continue;
-      const [sx, sy] = toScreen(x, y);
-      const d = Math.sqrt((sx - mx) ** 2 + (sy - my) ** 2);
-      if (d < closestDist) { closestDist = d; closest = id; }
-    }
-    setClickedNode(prev => prev === closest ? null : closest);
-    if (closest !== null) setTooltipPos({ x: e.clientX, y: e.clientY });
-  }, [data, frameIdx, filterMode, selectedNodes]);
-
-  // ── draw ──────────────────────────────────────────────────────────────────
-
-  const draw = useCallback(() => {
-    if (!data || !canvasRef.current) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    renderFrame(ctx, canvas.width, canvas.height, {
-      data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode,
-      showEncounters, encountersByNode, selectedMessage, carriers, hideCarriers,
-    });
-  }, [data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode, showEncounters,
-      encountersByNode, selectedMessage, carriers, hideCarriers]);
-
-  // ── effects ───────────────────────────────────────────────────────────────
-
-  useEffect(() => { draw(); }, [draw]);
-
-  useEffect(() => {
-    if (!playing || !data) return;
-    const tick = (now) => {
-      if (lastTickRef.current === null) lastTickRef.current = now;
-      const elapsed = now - lastTickRef.current;
-      const msPerFrame = 1000 / speed;
-      if (elapsed >= msPerFrame) {
-        lastTickRef.current = now;
-        setFrameIdx((i) => {
-          if (i >= data.frames.length - 1) { setPlaying(false); return i; }
-          return i + 1;
-        });
-      }
-      animRef.current = requestAnimationFrame(tick);
-    };
-    animRef.current = requestAnimationFrame(tick);
-    return () => { cancelAnimationFrame(animRef.current); lastTickRef.current = null; };
-  }, [playing, data, speed]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ro = new ResizeObserver(() => {
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
-      draw();
-    });
-    ro.observe(canvas);
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-    return () => ro.disconnect();
-  }, [draw]);
-
-  // ── helpers ───────────────────────────────────────────────────────────────
-
-  const handleNodesBtn = () => {
-    if (showPanel && sidebarTab === "nodes") setShowPanel(false);
-    else { setShowPanel(true); setSidebarTab("nodes"); }
-  };
-  const handleMessagesBtn = () => {
-    if (showPanel && sidebarTab === "messages") setShowPanel(false);
-    else { setShowPanel(true); setSidebarTab("messages"); }
-  };
-  const handleEncountersBtn = () => {
-    if (showPanel && sidebarTab === "encounters") setShowPanel(false);
-    else { setShowPanel(true); setSidebarTab("encounters"); }
-  };
-
-  const nodeCount = data ? Object.keys(data.frames[frameIdx]?.nodes ?? {}).length : 0;
-  const hasEncounters = data?.encounters.length > 0;
-  const hasMessages = data && allMessageIds.length > 0;
-  const msgInfo = selectedMessage ? data.messageOrigins[selectedMessage] : null;
-  const delivered = msgInfo && carriers.has(msgInfo.dest);
 
   // ── render ────────────────────────────────────────────────────────────────
 
+  const timelineData = data ?? data2;
+  const combinedEncTicks = new Set([...panel1.encounterTicks, ...panel2.encounterTicks]);
+  const combinedXferTicks = new Set([...panel1.transferTicks, ...panel2.transferTicks]);
+  const combinedDeliveryIdx = panel1.deliveryFrameIdx ?? panel2.deliveryFrameIdx;
+  const showEncountersOnTimeline = panel1.showEncounters || panel2.showEncounters;
+
   return (
     <div style={{ fontFamily: "var(--font-sans)", display: "flex", flexDirection: "column", height: "100vh" }}>
-      {!data && (
+
+      {/* ── Welcome screen ─────────────────────────────────────────────── */}
+      {!data && !data2 && (
         <div style={{
-          flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          gap: 22, background: "var(--color-background-secondary)", padding: "0 24px"
+          flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", gap: 22, background: "var(--color-background-secondary)", padding: "0 24px"
         }}>
           <h1 style={{ fontSize: 28, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
             Welcome to the Cadence Simulator Visualizer
           </h1>
 
-          {/* Experiment selector — only shown when the backend is running */}
           {serverAvailable && experiments && !loading && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center", width: "100%", maxWidth: 560 }}>
               <p style={{ fontSize: 19, color: "var(--color-text-secondary)", margin: 0 }}>
@@ -607,7 +276,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Loading state (covers both file and API loading) */}
           {loading ? (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
               <div style={{
@@ -674,151 +342,87 @@ export default function App() {
         </div>
       )}
 
-      {data && (
+      {/* ── Visualizer ─────────────────────────────────────────────────── */}
+      {(data || data2) && (
         <>
           <Header
             fileName={fileName}
-            timeLabel={formatDisplayTime(data.frames[frameIdx].t, data.meta.t_min, showAbsoluteTime)}
+            timeLabel={formatDisplayTime(
+              (data ?? data2).frames[frameIdx].t,
+              (data ?? data2).meta.t_min,
+              showAbsoluteTime,
+            )}
             showAbsoluteTime={showAbsoluteTime}
             onShowAbsoluteTimeChange={setShowAbsoluteTime}
-            nodeCount={nodeCount}
+            nodeCount={panel1.nodeCount || panel2.nodeCount}
             frameIdx={frameIdx}
-            frameCount={data.frames.length}
+            frameCount={(data ?? data2).frames.length}
             nodeSize={nodeSize}
             onNodeSizeChange={setNodeSize}
             speed={speed}
             onSpeedChange={setSpeed}
-            sidebarTab={sidebarTab}
-            showPanel={showPanel}
-            selectedNodeCount={selectedNodes.size}
-            selectedMessage={selectedMessage}
-            hasMessages={hasMessages}
-            hasEncounters={hasEncounters}
-            onNodesBtn={handleNodesBtn}
-            onMessagesBtn={handleMessagesBtn}
-            onEncountersBtn={handleEncountersBtn}
-            showLegend={showLegend}
-            onToggleLegend={() => setShowLegend(v => !v)}
+            // per-panel buttons only visible in single-view (in split view they live in the panel header)
+            splitView={splitView}
+            sidebarTab={panel1.sidebarTab}
+            showPanel={panel1.showPanel}
+            selectedNodeCount={panel1.selectedNodes.size}
+            selectedMessage={panel1.selectedMessage}
+            hasMessages={panel1.hasMessages}
+            hasEncounters={panel1.hasEncounters}
+            onNodesBtn={panel1.handleNodesBtn}
+            onMessagesBtn={panel1.handleMessagesBtn}
+            onEncountersBtn={panel1.handleEncountersBtn}
+            showLegend={panel1.showLegend}
+            onToggleLegend={() => panel1.setShowLegend(v => !v)}
             onHome={handleGoHome}
+            onToggleSplitView={toggleSplitView}
           />
 
-          {/* main area */}
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-            <div style={{ flex: 1, minWidth: 0, position: "relative" }} onClick={handleCanvasClick}>
-              <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", background: "var(--color-background-primary)" }} />
-              {clickedNode !== null && (
-                <div style={{
-                  position: "fixed", left: tooltipPos.x + 14, top: tooltipPos.y - 10,
-                  background: "rgba(0,0,0,0.75)", color: "#fff",
-                  padding: "3px 8px", borderRadius: 4, fontSize: 12,
-                  pointerEvents: "none", zIndex: 20, whiteSpace: "nowrap"
-                }}>
-                  Node {clickedNode}
-                </div>
-              )}
-            </div>
-
-            {showPanel && (
-              <div style={{
-                width: 220, borderLeft: "0.5px solid var(--color-border-tertiary)",
-                display: "flex", flexDirection: "column", overflow: "hidden",
-                background: "var(--color-background-secondary)"
-              }}>
-                {loadingExpData && (
-                  <div style={{
-                    padding: "6px 10px", fontSize: 11, color: "var(--color-text-secondary)",
-                    borderBottom: "0.5px solid var(--color-border-tertiary)",
-                    background: "rgba(59,130,246,0.07)", display: "flex", alignItems: "center", gap: 6
-                  }}>
-                    <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⟳</span>
-                    Loading message data…
-                  </div>
-                )}
-                {sidebarTab === "nodes" && (
-                  <NodesPanel
-                    nodeSearch={nodeSearch}
-                    onSearchChange={setNodeSearch}
-                    filterMode={filterMode}
-                    onFilterModeChange={setFilterMode}
-                    onSelectAll={selectAllNodes}
-                    onClear={clearNodes}
-                    selectedNodes={selectedNodes}
-                    filteredNodeIds={filteredNodeIds}
-                    nodeColors={nodeColors}
-                    onToggleNode={toggleNode}
-                    onSetNodeColor={setNodeColor}
-                    hasEncounters={hasEncounters}
-                    showEncounters={showEncounters}
-                    onShowEncountersChange={setShowEncounters}
-                    currentEncounters={currentEncounters}
-                    onEncounterClick={openEncounterPopup}
-                  />
-                )}
-
-                {sidebarTab === "messages" && (
-                  <MessagesPanel
-                    msgSearch={msgSearch}
-                    onSearchChange={setMsgSearch}
-                    onlyDelivered={onlyDelivered}
-                    onOnlyDeliveredChange={setOnlyDelivered}
-                    selectedMessage={selectedMessage}
-                    msgInfo={msgInfo}
-                    carriers={carriers}
-                    delivered={delivered}
-                    hideCarriers={hideCarriers}
-                    onHideCarriersChange={setHideCarriers}
-                    deliveredPath={selectedMessage ? data.deliveredPaths[selectedMessage] : null}
-                    deliveryMetrics={delivered ? deliveryMetrics : null}
-                    nodeColors={nodeColors}
-                    onClearSelected={() => setSelectedMessage(null)}
-                    filteredMessageIds={filteredMessageIds}
-                    messageOrigins={data.messageOrigins}
-                    deliveredPaths={data.deliveredPaths}
-                    onMessageClick={handleMessageClick}
-                  />
-                )}
-
-                {sidebarTab === "encounters" && (
-                  <EncountersPanel
-                    encSearch={encSearch}
-                    onSearchChange={setEncSearch}
-                    groups={filteredEncounterGroups}
-                    expandedT={expandedEncGroupT}
-                    onToggleExpand={(t) => setExpandedEncGroupT(prev => prev === t ? null : t)}
-                    onEncounterClick={openEncounterPopup}
-                    tMin={data.meta.t_min}
-                    showAbsoluteTime={showAbsoluteTime}
-                  />
-                )}
-              </div>
+            <VisualizerPanel
+              data={data}
+              panel={panel1}
+              frameIdx={frameIdx}
+              nodeSize={nodeSize}
+              showAbsoluteTime={showAbsoluteTime}
+              experimentName={fileName}
+              loadingExpData={loadingExpData}
+              splitView={splitView}
+              experiments={experiments}
+              onSelectExperiment={handleExperimentSelect}
+            />
+            {splitView && (
+              <VisualizerPanel
+                data={data2}
+                panel={panel2}
+                frameIdx={frameIdx}
+                nodeSize={nodeSize}
+                showAbsoluteTime={showAbsoluteTime}
+                experimentName={fileName2}
+                loadingExpData={loadingExpData2}
+                splitView={splitView}
+                experiments={experiments}
+                onSelectExperiment={handleExperiment2Select}
+              />
             )}
           </div>
 
           <Timeline
             playing={playing}
             onTogglePlay={() => setPlaying(p => !p)}
-            frames={data.frames}
+            frames={(data ?? data2).frames}
             frameIdx={frameIdx}
-            onScrub={(idx) => { setPlaying(false); setFrameIdx(idx); }}
-            showEncounters={showEncounters}
-            encounterTicks={encounterTicks}
-            transferTicks={transferTicks}
-            deliveryFrameIdx={deliveryFrameIdx}
+            onScrub={onScrub}
+            showEncounters={showEncountersOnTimeline}
+            encounterTicks={combinedEncTicks}
+            transferTicks={combinedXferTicks}
+            deliveryFrameIdx={combinedDeliveryIdx}
             dayMarkers={dayMarkers}
-            tMin={data.meta.t_min}
+            tMin={(data ?? data2).meta.t_min}
             showAbsoluteTime={showAbsoluteTime}
           />
         </>
       )}
-
-      <EncounterPopup
-        encounter={encounterPopup}
-        getMessages={getMessagesForEncounter}
-        onClose={() => setEncounterPopup(null)}
-        onMessageClick={handlePopupMessageClick}
-        tMin={data?.meta.t_min}
-        showAbsoluteTime={showAbsoluteTime}
-      />
     </div>
   );
 }
