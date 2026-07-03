@@ -136,6 +136,17 @@ def load_experiment_data(experiment_name: str) -> dict:
             {"id": mid, "t": int(float(t_xfer)), "from": int(sndr), "to": int(recv)}
         )
 
+    # buffer-eviction drops — nodes that once carried a message but later dropped it
+    drops: dict[str, list] = {}
+    cur.execute(
+        "SELECT message_id, node_id, drop_time FROM message_drop_dbs "
+        "WHERE experiment_name=? ORDER BY drop_time",
+        (experiment_name,),
+    )
+    for msg_id, node_id, drop_time in cur.fetchall():
+        mid = str(msg_id)
+        drops.setdefault(mid, []).append({"node": int(node_id), "t": int(float(drop_time))})
+
     # delivered message paths
     delivered_paths: dict[str, list] = {}
     cur.execute(
@@ -169,6 +180,7 @@ def load_experiment_data(experiment_name: str) -> dict:
         "messageOrigins": msg_origins,
         "transfers": transfers,
         "deliveredPaths": delivered_paths,
+        "drops": drops,
     }
     _exp_cache[experiment_name] = result
     return result
@@ -184,6 +196,7 @@ async def lifespan(app: FastAPI):
     con.execute("CREATE INDEX IF NOT EXISTS idx_msg_exp ON message_dbs(experiment_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_del_exp ON delivered_message_dbs(experiment_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_enc_exp ON encounters(experiment_name, dataset_name)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_drop_exp ON message_drop_dbs(experiment_name, drop_time)")
     # Covering index so the GROUP BY deduplication query reads from the index
     # directly without touching the main table or creating a temp B-tree.
     con.execute(

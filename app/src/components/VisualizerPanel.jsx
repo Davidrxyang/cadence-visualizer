@@ -4,7 +4,7 @@ import { renderFrame } from "../lib/canvasDraw";
 // Canvas-only panel. Sidebar lives in CombinedSidebar (App.jsx level).
 // Selection state is passed in via `selection`; per-canvas tooltip state lives in `panel`.
 export default function VisualizerPanel({
-  data, panel, frameIdx, nodeSize, selection,
+  data, panel, frameIdx, nodeSize, selection, borderColor,
 }) {
   const canvasRef = useRef(null);
 
@@ -69,7 +69,7 @@ export default function VisualizerPanel({
   }, [data, frameIdx, selection, panel]);
 
   return (
-    <div style={{ flex: 1, minWidth: 0, position: "relative" }} onClick={handleCanvasClick}>
+    <div style={{ flex: 1, minWidth: 0, position: "relative", border: borderColor ? `1.5px solid ${borderColor}` : undefined }} onClick={handleCanvasClick}>
       <canvas
         ref={canvasRef}
         style={{ display: "block", width: "100%", height: "100%", background: "var(--color-background-primary)" }}

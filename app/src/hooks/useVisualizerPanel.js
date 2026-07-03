@@ -39,6 +39,10 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
       if (xfer.t > frameT) break;
       result.add(xfer.to);
     }
+    for (const drop of (data.drops?.[selectedMessage] ?? [])) {
+      if (drop.t > frameT) break;
+      result.delete(drop.node);
+    }
     return result;
   }, [selectedMessage, frameIdx, data]);
 

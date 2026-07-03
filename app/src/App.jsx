@@ -587,13 +587,14 @@ export default function App() {
 
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
             {/* Canvas area */}
-            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0 }}>
+            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0, gap: mode === "split" ? 6 : 0 }}>
               <VisualizerPanel
                 data={data}
                 panel={panel1}
                 frameIdx={frameIdx}
                 nodeSize={nodeSize}
                 selection={selection}
+                borderColor={mode === "split" ? "#3b82f6" : undefined}
               />
               {mode === "split" && (
                 <VisualizerPanel
@@ -602,6 +603,7 @@ export default function App() {
                   frameIdx={frameIdx}
                   nodeSize={nodeSize}
                   selection={selection}
+                  borderColor="#f97316"
                 />
               )}
             </div>
