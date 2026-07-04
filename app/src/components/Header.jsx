@@ -17,7 +17,7 @@ export default function Header({
           {expNames.map((n, i) => (
             <span key={i} style={{
               fontSize: 13, fontWeight: 500,
-              color: i === 0 ? "#3b82f6" : "#f97316",
+              color: i === 0 ? "#3b82f6" : "#22c55e",
               maxWidth: 340, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
             }} title={n}>
               {n.replace(/^japan - /, "")}

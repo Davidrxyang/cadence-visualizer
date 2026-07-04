@@ -1,8 +1,6 @@
 # Cadence Visualizer
 
-The Cadence Visualizer is a visualization tool created to accompany [the Cadence Simulator](https://github.com/GUSecLab/cadence). The Cadence Simulator provides a framework to test decentralized message passing algorithms on mobility datasets.The Cadence Visualizer allows users to visualize node movement, node interactions, message movement, as well as algorithm-specific behavior such as buffer status, across the virtual geographical environment over time. 
-
-
+The Cadence Visualizer is a visualization tool created to accompany [the Cadence Simulator](https://github.com/GUSecLab/cadence). The Cadence Simulator provides a framework to test decentralized message passing algorithms on mobility datasets.The Cadence Visualizer allows users to visualize node movement, node interactions, and message transfers across the virtual geographical environment over time. 
 
 ## Setup
 
@@ -36,7 +34,7 @@ npm run dev
 
 Open `http://localhost:5173`, select how many experiments to compare, and pick from the list served by the backend.
 
-## Cadence Visualizer Demo
+## Cadence Visualizer Demo (OUTDATED)
 
 This demo uses the japan dataset (frames/japan_frames.jsonl.gz).
 
@@ -74,49 +72,10 @@ Immediately following the encounter, node 10 and node 103 continue moving and se
 
 ## Technical Details
 
-The visualizer is split into two components: an offline export script and a browser-based renderer.
+**Backend (`server/`)** is a FastAPI app that reads directly from the SQLite database. Node position frames are shared across all experiments and cached in memory on first request. Per-experiment data (message transfers, delivered paths, buffer-eviction drops) is queried and cached on demand. Encounters are dataset-wide and not filtered by experiment.
 
-Data export (export_frames.py) preprocesses the raw SQLite database into a compact .jsonl.gz file. Raw event data (one row per node per second) is bucketed into 30-second intervals, keeping the last known position per node per bucket. Node positions are encoded as flat [id, x, y, ...] integer arrays and written as one JSON line per time bucket. Encounter records are appended after all frame records. The output is gzip-compressed, reducing file size by ~70%. A metadata header line stores coordinate bounds and bucket size for the renderer to use.
+**Frontend (`app/`)** is a React + Vite SPA. On startup the user selects one or two experiments; all required data is fetched in parallel before the visualizer opens. In split mode, both canvases share the same selection state (selected nodes, colors, active message) so interactions are synchronized.
 
-Renderer (app/) is a React + Vite single-page application. The browser decompresses the .jsonl.gz file using the native DecompressionStream API and parses the JSONL into a frame array and an encounter array held in memory.
+**Rendering** is done on an HTML5 canvas. Each frame repaints in five passes: grid and axis labels, background nodes, message carriers (triangles), selected nodes (colored circles with white outline), and encounter/transfer markers. A linear coordinate transform maps simulation meters to canvas pixels with a Y-axis flip.
 
-Rendering is done on an HTML5 canvas. On each frame change, the canvas is repainted in draw order: grid, motion trails, background nodes, selected nodes, encounter markers. A linear coordinate transform maps simulation units to canvas pixels, with a 20px margin and a Y-axis flip to account for canvas coordinates increasing downward.
-
-Encounters are pre-indexed into a node → encounter[] map at load time, making per-frame encounter lookups O(encounters per selected node) rather than O(all encounters). Timeline tick positions for encounters are precomputed into a Set<frameIndex> whenever the node selection changes.
-
-Hit-testing for node identification is performed manually on click: the click position is checked against every visible node in the current frame using Euclidean distance, returning the closest node within a 10-pixel radius.
-
-## Progress
-
-- implemented node movement visualization
-- implemented encounter visualization
-- implemented basic GUI
-
-### TODO
-
-- fix tdrive
-    - the tdrive dataset has a few geographic outliers. This messes with the bounds calculation logic for the visualizer and causes nodes to be clumped together to accomodate for a few far away datapoints. 
-    - either remove the outliers or find some other fix. 
-
-- message tracking 
-    - follow a message as it moves through the network
-    - follow its copies
-
-- algorithm behavior tracking
-    - node status tracking 
-        - node buffer status
-        - node mobility profile
-    - global status
-        - global mobility profile 
-
-- metrics
-    - real time delivery metrics, how many messages have been generated/delivered at this point in time?
-    - network congestion - how many messages/copies are present/dropped/etc in the current network?
-
-- control 
-    - customizable parameters
-        - ideally, I would like to avoid rerunning the simulator in real-time - naturally, I believe the best route is to pre-run several parameter combinations and allow the user to choose which experiment configuration to display results from. 
-
-- deployment
-    - deploy as a web application using some cloud service provider
-    - simple access through a web link
+**Message carrier tracking** builds the carrier set at each frame by starting from the origin node, adding every node that received the message up to the current timestamp, then subtracting any nodes that dropped it via buffer eviction.

@@ -14,7 +14,7 @@ export default function Timeline({
 
   const EXP_COLORS = [
     { rgb: [59, 130, 246], hex: "#3b82f6" },   // blue  — exp 1
-    { rgb: [249, 115, 22], hex: "#f97316" },    // orange — exp 2
+    { rgb: [34, 197, 94], hex: "#22c55e" },     // green — exp 2
   ];
 
   const xferRows = [

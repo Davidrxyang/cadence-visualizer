@@ -130,20 +130,20 @@ export default function Legend({ show, onToggle, splitMode }) {
                     label="Exp 1 delivery marker (blue)"
                   />
                   <LegendRow
-                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(249,115,22,0.9)" }} />}
-                    label="Exp 2 transfer tick on timeline (orange)"
+                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(34,197,94,0.9)" }} />}
+                    label="Exp 2 transfer tick on timeline (green)"
                   />
                   <LegendRow
-                    preview={<div style={{ width: 3, height: 14, borderRadius: 2, background: "#f97316" }} />}
-                    label="Exp 2 delivery marker (orange)"
+                    preview={<div style={{ width: 3, height: 14, borderRadius: 2, background: "#22c55e" }} />}
+                    label="Exp 2 delivery marker (green)"
                   />
                   <LegendRow
                     preview={<span style={{ fontSize: 11, color: "#3b82f6", fontWeight: 600 }}>✓</span>}
                     label="Exp 1 delivered (blue in message list)"
                   />
                   <LegendRow
-                    preview={<span style={{ fontSize: 11, color: "#f97316", fontWeight: 600 }}>✓</span>}
-                    label="Exp 2 delivered (orange in message list)"
+                    preview={<span style={{ fontSize: 11, color: "#22c55e", fontWeight: 600 }}>✓</span>}
+                    label="Exp 2 delivered (green in message list)"
                   />
                 </>
               )}

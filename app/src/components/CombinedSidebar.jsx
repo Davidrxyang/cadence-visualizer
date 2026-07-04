@@ -217,7 +217,7 @@ export default function CombinedSidebar({
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
                     {[
                       { name: expName1, p: panel1, path: deliveredPath1, expColor: "#3b82f6" },
-                      { name: expName2, p: panel2, path: deliveredPath2, expColor: "#f97316" },
+                      { name: expName2, p: panel2, path: deliveredPath2, expColor: "#22c55e" },
                     ].map(({ name, p, path, expColor }, idx) => (
                       <div key={idx} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 8px", borderRadius: "var(--border-radius-md)", background: "rgba(255,255,255,0.04)", border: "0.5px solid var(--color-border-tertiary)" }}>
                         <span style={{ fontSize: 10, fontWeight: 600, color: expColor, opacity: 0.9 }} title={name}>
@@ -309,7 +309,7 @@ export default function CombinedSidebar({
                     {splitMode ? (
                       <>
                         {isDelivered1 && <span style={{ fontSize: 9, color: "#3b82f6" }} title={`Delivered in ${short(expName1)}`}>✓</span>}
-                        {isDelivered2 && <span style={{ fontSize: 9, color: "#f97316" }} title={`Delivered in ${short(expName2)}`}>✓</span>}
+                        {isDelivered2 && <span style={{ fontSize: 9, color: "#22c55e" }} title={`Delivered in ${short(expName2)}`}>✓</span>}
                       </>
                     ) : (
                       isDelivered1 && <span style={{ fontSize: 10, color: "#3b82f6" }}>✓</span>

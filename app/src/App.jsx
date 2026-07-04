@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { DEFAULT_NODE_RADIUS, MAX_SELECTED_NODES } from "./lib/constants";
 import { NODE_COLOR_PALETTE } from "./lib/colors";
-import { parseJSONL, parseAPIFrames, formatDisplayTime } from "./lib/parse";
+import { parseAPIFrames, formatDisplayTime } from "./lib/parse";
 import { useVisualizerPanel } from "./hooks/useVisualizerPanel";
 import Header from "./components/Header";
 import VisualizerPanel from "./components/VisualizerPanel";
@@ -290,41 +290,6 @@ export default function App() {
     }
   };
 
-  // ── File load (single mode only) ──────────────────────────────────────────
-
-  const handleFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setWelcomeStep("loading");
-    setError(null);
-    setLoadProgress({ frames: true, exp1: false, exp2: false });
-    try {
-      let text;
-      if (file.name.endsWith(".gz")) {
-        const buf = await file.arrayBuffer();
-        const ds = new DecompressionStream("gzip");
-        const writer = ds.writable.getWriter();
-        writer.write(new Uint8Array(buf));
-        writer.close();
-        const out = await new Response(ds.readable).arrayBuffer();
-        text = new TextDecoder().decode(out);
-      } else {
-        text = await file.text();
-      }
-      const parsed = parseJSONL(text);
-      if (!parsed.frames.length) throw new Error("No frames found in file.");
-      setLoadProgress({ frames: true, exp1: true, exp2: true });
-      resetSelection();
-      setFrameIdx(0);
-      setPlaying(false);
-      setData(parsed);
-      setFileName(file.name);
-    } catch (err) {
-      setError(err.message);
-      setWelcomeStep("select");
-    }
-  };
-
   // ── Home ──────────────────────────────────────────────────────────────────
 
   const handleGoHome = () => {
@@ -544,16 +509,6 @@ export default function App() {
                 </button>
               )}
 
-              {mode === "single" && (
-                <>
-                  <span style={{ fontSize: 13, color: "var(--color-text-secondary)", opacity: 0.5 }}>— or —</span>
-                  <label style={{ cursor: "pointer", padding: "11px 26px", borderRadius: "var(--border-radius-md)", border: "0.5px solid var(--color-border-secondary)", fontSize: 17, background: "var(--color-background-primary)", color: "var(--color-text-primary)" }}>
-                    Load from file
-                    <input type="file" accept=".jsonl,.gz" onChange={handleFile} style={{ display: "none" }} />
-                  </label>
-                </>
-              )}
-
               {error && <p style={{ fontSize: 14, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
             </>
           )}
@@ -603,7 +558,7 @@ export default function App() {
                   frameIdx={frameIdx}
                   nodeSize={nodeSize}
                   selection={selection}
-                  borderColor="#f97316"
+                  borderColor="#22c55e"
                 />
               )}
             </div>
