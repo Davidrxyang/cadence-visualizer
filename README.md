@@ -79,3 +79,27 @@ Immediately following the encounter, node 10 and node 103 continue moving and se
 **Rendering** is done on an HTML5 canvas. Each frame repaints in five passes: grid and axis labels, background nodes, message carriers (triangles), selected nodes (colored circles with white outline), and encounter/transfer markers. A linear coordinate transform maps simulation meters to canvas pixels with a Y-axis flip.
 
 **Message carrier tracking** builds the carrier set at each frame by starting from the origin node, adding every node that received the message up to the current timestamp, then subtracting any nodes that dropped it via buffer eviction.
+
+## Notes
+
+- some transfers seem "far" (Day 54, 12:30:00), this is because encounters are on seconds/minutes scale but frame displays are bucketed to 30 minute intervals. This can create discrepancies of dozens of kilometers (due to cars and such).
+
+- there seems to be slight data integrity issues in the raw dataset, not much we can do about it. It does not seem to be a big issue and only has very minor effects. 
+
+t=1708750800  Node 21: (84500, 62000)   ← Position A
+t=1708752600  Node 21: (69500, 44000)   ← transit?
+t=1708754400  Node 21: (63500, 41000)   ← near encounter zone
+t=1708756200  Node 21: (85000, 62000)   ← back to A
+t=1708758000  Node 21: (58500, 35500)   ← Position B
+t=1708759800  Node 21: (58500, 35500)
+...
+t=1708768800  Node 21: (85000, 62000)   ← A
+t=1708770600  Node 21: (58500, 35500)   ← B
+t=1708772400  Node 21: (58500, 35500)
+t=1708774200  Node 21: (84500, 62500)   ← A
+t=1708776000  Node 21: (58000, 35500)   ← B
+t=1708777800  Node 21: (85000, 62000)   ← A
+t=1708779600  Node 21: (58000, 35500)   ← B  
+t=1708781400  Node 21: (85000, 62000)   ← A
+
+Node 21 is oscillating between two positions roughly 30 km apart every 30 minutes, repeatedly, for hours. 
