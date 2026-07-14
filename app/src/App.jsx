@@ -40,7 +40,7 @@ const EXP_GROUPS = [
   },
 ];
 const EXP_ORDER = EXP_GROUPS.flatMap(g => g.keys);
-const displayName = (raw) => EXP_DISPLAY[raw] ?? raw.replace(/^japan - /, "");
+const displayName = (raw) => !raw ? "" : (EXP_DISPLAY[raw] ?? raw.replace(/^japan - /, ""));
 
 // ── Welcome step helpers ──────────────────────────────────────────────────────
 
