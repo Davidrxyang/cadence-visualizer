@@ -8,6 +8,40 @@ import VisualizerPanel from "./components/VisualizerPanel";
 import CombinedSidebar from "./components/CombinedSidebar";
 import Timeline from "./components/Timeline";
 
+// ── Experiment display names ──────────────────────────────────────────────────
+// Maps raw DB experiment_name → friendly display label.
+// Only experiments listed here are shown in the selection UI.
+const EXP_DISPLAY = {
+  "japan - broadcast buffer=500 run=1":                          "Maximal Flooding",
+  "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1": "Probabilistic Flooding",
+  "japan - randomwalk-v1 buffer=500 run=1":                     "Handoff",
+  "japan - ppbr buffer=500 run=1":                              "PPBR",
+  "japan - mirage p=0.55 k=2 buffer=500 run=1":                "MIRAGE p=0.55",
+  "japan - mirage p=0.6 k=2 buffer=500 run=1":                 "MIRAGE p=0.6",
+  "japan - mirage p=0.65 k=2 buffer=500 run=1":                "MIRAGE p=0.65",
+};
+const EXP_GROUPS = [
+  {
+    label: "Basic Protocols",
+    keys: [
+      "japan - broadcast buffer=500 run=1",
+      "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1",
+      "japan - randomwalk-v1 buffer=500 run=1",
+    ],
+  },
+  {
+    label: "Profile-Based Protocols",
+    keys: [
+      "japan - ppbr buffer=500 run=1",
+      "japan - mirage p=0.55 k=2 buffer=500 run=1",
+      "japan - mirage p=0.6 k=2 buffer=500 run=1",
+      "japan - mirage p=0.65 k=2 buffer=500 run=1",
+    ],
+  },
+];
+const EXP_ORDER = EXP_GROUPS.flatMap(g => g.keys);
+const displayName = (raw) => EXP_DISPLAY[raw] ?? raw.replace(/^japan - /, "");
+
 // ── Welcome step helpers ──────────────────────────────────────────────────────
 
 const GH_ICON = (
@@ -326,7 +360,7 @@ export default function App() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const expNames = [fileName, fileName2].filter(Boolean);
+  const expNames = [fileName, fileName2].filter(Boolean).map(displayName);
 
   return (
     <div style={{ fontFamily: "var(--font-sans)", display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -348,8 +382,8 @@ export default function App() {
               <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
                 {[
                   { key: "frames", label: "Loading frames" },
-                  { key: "exp1", label: `Loading ${(pendingExps[0] ?? "experiment 1").replace(/^japan - /, "")}` },
-                  ...(mode === "split" ? [{ key: "exp2", label: `Loading ${(pendingExps[1] ?? "experiment 2").replace(/^japan - /, "")}` }] : []),
+                  { key: "exp1", label: `Loading ${displayName(pendingExps[0] ?? "protocol 1")}` },
+                  ...(mode === "split" ? [{ key: "exp2", label: `Loading ${displayName(pendingExps[1] ?? "protocol 2")}` }] : []),
                 ].map(({ key, label }) => (
                   <div key={key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -382,7 +416,7 @@ export default function App() {
                 Welcome to the Cadence Simulator Visualizer
               </h1>
               <p style={{ fontSize: 18, color: "var(--color-text-secondary)", margin: 0 }}>
-                How many experiments would you like to open?
+                How many protocols would you like to examine?
               </p>
               <div style={{ display: "flex", gap: 16 }}>
                 <button
@@ -394,7 +428,7 @@ export default function App() {
                     fontWeight: 500,
                   }}
                 >
-                  1 Experiment
+                  1 Protocol
                 </button>
                 <button
                   onClick={() => { setMode("split"); setWelcomeStep("select"); }}
@@ -405,7 +439,7 @@ export default function App() {
                     fontWeight: 500,
                   }}
                 >
-                  2 Experiments
+                  2 Protocols
                 </button>
               </div>
 
@@ -433,83 +467,89 @@ export default function App() {
             </>
           )}
 
-          {/* ── Experiment selection ─────────────────────────────────────── */}
+          {/* ── Protocol selection ───────────────────────────────────────── */}
           {welcomeStep === "select" && (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-                <button
-                  onClick={() => { setMode(null); setWelcomeStep("mode"); setPendingExps([]); setError(null); }}
-                  style={{ padding: "6px 12px", fontSize: 13, cursor: "pointer", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", background: "var(--color-background-primary)", color: "var(--color-text-secondary)" }}
-                >
-                  ← Back
-                </button>
-                <h2 style={{ fontSize: 20, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
-                  {mode === "single" ? "Select an experiment" : "Select two experiments to compare"}
-                </h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", maxWidth: 360, alignItems: "stretch" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <button
+                    onClick={() => { setMode(null); setWelcomeStep("mode"); setPendingExps([]); setError(null); }}
+                    style={{ padding: "5px 10px", fontSize: 13, cursor: "pointer", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", background: "transparent", color: "var(--color-text-secondary)", flexShrink: 0 }}
+                  >
+                    ← Back
+                  </button>
+                  <h2 style={{ fontSize: 17, fontWeight: 600, color: "var(--color-text-primary)", margin: 0 }}>
+                    {mode === "single" ? "Select a protocol" : "Select two protocols to compare"}
+                  </h2>
+                </div>
+
+                {serverAvailable && experiments && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                    {EXP_GROUPS.map(group => {
+                      const visible = group.keys.filter(n => experiments.includes(n));
+                      if (!visible.length) return null;
+                      return (
+                        <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-secondary)", opacity: 0.6, textTransform: "uppercase", letterSpacing: 0.6, paddingLeft: 2, marginBottom: 2 }}>
+                            {group.label}
+                          </span>
+                          {visible.map(name => {
+                            const selIdx = pendingExps.indexOf(name);
+                            const isSelected = selIdx >= 0;
+                            return (
+                              <button
+                                key={name}
+                                onClick={() => togglePendingExp(name)}
+                                style={{
+                                  display: "flex", alignItems: "center", gap: 10,
+                                  padding: "11px 14px", borderRadius: "var(--border-radius-md)", fontSize: 14,
+                                  border: isSelected ? "0.5px solid rgba(59,130,246,0.5)" : "0.5px solid var(--color-border-tertiary)",
+                                  cursor: "pointer", textAlign: "left",
+                                  background: isSelected ? "rgba(59,130,246,0.12)" : "rgba(255,255,255,0.03)",
+                                  color: isSelected ? "#3b82f6" : "var(--color-text-primary)",
+                                  fontWeight: isSelected ? 600 : 400,
+                                  transition: "background 0.15s, border-color 0.15s",
+                                }}
+                              >
+                                <span style={{ width: 18, fontSize: 13, flexShrink: 0, opacity: isSelected ? 1 : 0 }}>
+                                  {["①", "②"][selIdx]}
+                                </span>
+                                {displayName(name)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!serverAvailable && (
+                  <p style={{ fontSize: 14, color: "var(--color-text-secondary)", margin: 0 }}>
+                    Server not available.
+                  </p>
+                )}
+
+                {mode === "split" && (
+                  <button
+                    disabled={pendingExps.length < 2}
+                    onClick={() => startLoading(pendingExps)}
+                    style={{
+                      padding: "11px 0", borderRadius: "var(--border-radius-md)", fontSize: 15,
+                      border: "0.5px solid var(--color-border-secondary)",
+                      cursor: pendingExps.length < 2 ? "not-allowed" : "pointer",
+                      background: pendingExps.length < 2 ? "transparent" : "var(--color-background-primary)",
+                      color: pendingExps.length < 2 ? "var(--color-text-secondary)" : "var(--color-text-primary)",
+                      opacity: pendingExps.length < 2 ? 0.4 : 1,
+                      fontWeight: 500,
+                    }}
+                  >
+                    Compare ▶
+                  </button>
+                )}
+
+                {error && <p style={{ fontSize: 14, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
               </div>
-
-              {mode === "split" && pendingExps.length > 0 && (
-                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "center" }}>
-                  {pendingExps.map((name, i) => (
-                    <span key={i} style={{ padding: "5px 12px", borderRadius: "var(--border-radius-md)", background: "rgba(59,130,246,0.15)", border: "0.5px solid rgba(59,130,246,0.4)", fontSize: 13, color: "#3b82f6" }}>
-                      {["①", "②"][i]} {name.replace(/^japan - /, "")}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {serverAvailable && experiments && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", maxWidth: 640 }}>
-                  {experiments.map(name => {
-                    const selIdx = pendingExps.indexOf(name);
-                    const isSelected = selIdx >= 0;
-                    return (
-                      <button
-                        key={name}
-                        onClick={() => togglePendingExp(name)}
-                        style={{
-                          padding: "9px 16px", borderRadius: "var(--border-radius-md)", fontSize: 14,
-                          border: isSelected
-                            ? "0.5px solid rgba(59,130,246,0.7)"
-                            : "0.5px solid var(--color-border-secondary)",
-                          cursor: "pointer",
-                          background: isSelected ? "rgba(59,130,246,0.15)" : "var(--color-background-primary)",
-                          color: isSelected ? "#3b82f6" : "var(--color-text-primary)",
-                          fontWeight: isSelected ? 600 : 400,
-                        }}
-                      >
-                        {isSelected && <span style={{ marginRight: 4 }}>{["①", "②"][selIdx]}</span>}
-                        {name.replace(/^japan - /, "")}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {!serverAvailable && (
-                <p style={{ fontSize: 14, color: "var(--color-text-secondary)" }}>
-                  Server not available. Load a file instead.
-                </p>
-              )}
-
-              {mode === "split" && (
-                <button
-                  disabled={pendingExps.length < 2}
-                  onClick={() => startLoading(pendingExps)}
-                  style={{
-                    padding: "11px 28px", borderRadius: "var(--border-radius-md)", fontSize: 16,
-                    border: "0.5px solid var(--color-border-secondary)", cursor: pendingExps.length < 2 ? "not-allowed" : "pointer",
-                    background: pendingExps.length < 2 ? "var(--color-background-secondary)" : "var(--color-background-primary)",
-                    color: pendingExps.length < 2 ? "var(--color-text-secondary)" : "var(--color-text-primary)",
-                    opacity: pendingExps.length < 2 ? 0.5 : 1,
-                    fontWeight: 500,
-                  }}
-                >
-                  Compare ▶
-                </button>
-              )}
-
-              {error && <p style={{ fontSize: 14, color: "var(--color-text-danger)", margin: 0 }}>{error}</p>}
             </>
           )}
         </div>
@@ -567,8 +607,8 @@ export default function App() {
             <CombinedSidebar
               data1={data}
               data2={mode === "split" ? data2 : null}
-              expName1={fileName}
-              expName2={fileName2}
+              expName1={displayName(fileName)}
+              expName2={displayName(fileName2)}
               panel1={panel1}
               panel2={mode === "split" ? panel2 : null}
               frameIdx={frameIdx}

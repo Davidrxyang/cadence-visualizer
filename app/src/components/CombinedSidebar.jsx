@@ -24,7 +24,7 @@ export default function CombinedSidebar({
   const data = data1;
   const tMin = data?.meta?.t_min;
   const splitMode = !!data2;
-  const short = (n) => (n ?? "").replace(/^japan - /, "");
+  const short = (n) => n ?? "";
 
   // ── shared lists (identical across experiments) ───────────────────────────
 
