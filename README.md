@@ -1,4 +1,4 @@
-# Introduction
+# 1. Introduction
 
 When a user sends a direct message on a platform such as Instagram, this message first travels from the sender's device to a centralized server system maintained by the platform provider (Instagram/Meta). This centralized server system then delivers the message to the designated recipient's device. What happens when this centralized server system is unavailable or untrustworthy?
 
@@ -6,7 +6,7 @@ Common digital communication systems, such as messaging platforms or email, take
 
 To address these concerns, alternative systems leverage human-to-human links to communicate messages. These links are established when individual devices, such as cellphones, come within proximity to each other, allowing messages to flow through protocols such as WIFI or Bluetooth. These decentralized, human networks, called **HumaNets**, bypass centralized infrastructure and its associated vulnerabilities.
 
-# Consideration Factors
+# 2. Consideration Factors
 
 HumaNet message routing protocols are judged by the following measures:
 
