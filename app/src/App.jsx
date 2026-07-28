@@ -16,9 +16,9 @@ const EXP_DISPLAY = {
   "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1": "Probabilistic Flooding",
   "japan - randomwalk-v1 buffer=500 run=1":                     "Handoff",
   "japan - ppbr buffer=500 run=1":                              "PPBR",
-  "japan - mirage p=0.55 k=2 buffer=500 run=1":                "MIRAGE p=0.55",
-  "japan - mirage p=0.6 k=2 buffer=500 run=1":                 "MIRAGE p=0.6",
-  "japan - mirage p=0.65 k=2 buffer=500 run=1":                "MIRAGE p=0.65",
+  "japan - mirage p=0.55 k=2 buffer=500 run=1":                "MIRAGE - High Privacy",
+  "japan - mirage p=0.6 k=2 buffer=500 run=1":                 "MIRAGE - Medium Privacy",
+  "japan - mirage p=0.65 k=2 buffer=500 run=1":                "MIRAGE - Low Privacy",
 };
 const EXP_GROUPS = [
   {
