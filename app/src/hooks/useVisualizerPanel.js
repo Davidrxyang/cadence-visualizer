@@ -143,6 +143,49 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
     return { hops: path ? path.length - 1 : null, latencySeconds: deliverXfer.t - created, deliveredAt: deliverXfer.t };
   }, [selectedMessage, data]);
 
+  // Prefix-sum array for bandwidth running total — recomputed only when data changes
+  const bwPrefixSums = useMemo(() => {
+    const bws = data?.bandwidths;
+    if (!bws?.length) return null;
+    const ts = new Float64Array(bws.length);
+    const sums = new Float64Array(bws.length);
+    let running = 0;
+    for (let i = 0; i < bws.length; i++) {
+      running += bws[i].bw;
+      ts[i] = bws[i].t;
+      sums[i] = running;
+    }
+    return { ts, sums };
+  }, [data]);
+
+  const totalMessageCopies = useMemo(() => {
+    const loads = data?.epochLoads;
+    if (!loads?.length) return null;
+    const frameT = data.frames[frameIdx]?.t;
+    if (frameT == null) return null;
+    let lo = 0, hi = loads.length - 1, result = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (loads[mid].t <= frameT) { result = loads[mid].load; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return result;
+  }, [data, frameIdx]);
+
+  const totalMessageTransfers = useMemo(() => {
+    if (!bwPrefixSums) return 0;
+    const frameT = data.frames[frameIdx]?.t;
+    if (frameT == null) return 0;
+    const { ts, sums } = bwPrefixSums;
+    let lo = 0, hi = ts.length - 1, idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (ts[mid] <= frameT) { idx = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return idx >= 0 ? Math.round(sums[idx]) : 0;
+  }, [bwPrefixSums, frameIdx, data]);
+
   const findFrameIdxForTime = useCallback((t) => {
     if (!data) return null;
     const { bucket } = data.meta;
@@ -180,6 +223,7 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
     transferTicks, deliveryFrameIdx, deliveryMetrics,
     getMessagesForEncounter, openEncounterPopup, handlePopupMessageClick,
     nodeCount, hasEncounters, msgInfo, delivered,
+    totalMessageCopies, totalMessageTransfers,
     clickedNode, setClickedNode, tooltipPos, setTooltipPos,
     encounterPopup, setEncounterPopup,
   };

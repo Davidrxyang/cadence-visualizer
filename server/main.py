@@ -136,6 +136,24 @@ def load_experiment_data(experiment_name: str) -> dict:
             {"id": mid, "t": int(float(t_xfer)), "from": int(sndr), "to": int(recv)}
         )
 
+    # total message copies per epoch
+    epoch_loads: list = []
+    cur.execute(
+        "SELECT now, load FROM epoch_loads WHERE experiment_name=? ORDER BY now",
+        (experiment_name,),
+    )
+    for now, load in cur.fetchall():
+        epoch_loads.append({"t": int(float(now)), "load": int(float(load))})
+
+    # per-encounter bandwidth (message transfers) — used for running total
+    bandwidths: list = []
+    cur.execute(
+        "SELECT time, bandwidth FROM bandwidths WHERE experiment_name=? ORDER BY time",
+        (experiment_name,),
+    )
+    for t, bw in cur.fetchall():
+        bandwidths.append({"t": int(float(t)), "bw": float(bw)})
+
     # buffer-eviction drops — nodes that once carried a message but later dropped it
     drops: dict[str, list] = {}
     cur.execute(
@@ -181,6 +199,8 @@ def load_experiment_data(experiment_name: str) -> dict:
         "transfers": transfers,
         "deliveredPaths": delivered_paths,
         "drops": drops,
+        "epochLoads": epoch_loads,
+        "bandwidths": bandwidths,
     }
     _exp_cache[experiment_name] = result
     return result
@@ -197,6 +217,8 @@ async def lifespan(app: FastAPI):
     con.execute("CREATE INDEX IF NOT EXISTS idx_del_exp ON delivered_message_dbs(experiment_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_enc_exp ON encounters(experiment_name, dataset_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_drop_exp ON message_drop_dbs(experiment_name, drop_time)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_epoch_loads_exp ON epoch_loads(experiment_name, now)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_bandwidths_exp ON bandwidths(experiment_name, time)")
     # Covering index so the GROUP BY deduplication query reads from the index
     # directly without touching the main table or creating a temp B-tree.
     con.execute(

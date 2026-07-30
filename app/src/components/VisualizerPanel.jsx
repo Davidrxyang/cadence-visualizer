@@ -74,6 +74,29 @@ export default function VisualizerPanel({
         ref={canvasRef}
         style={{ display: "block", width: "100%", height: "100%", background: "var(--color-background-primary)" }}
       />
+      {(panel.totalMessageCopies != null || panel.totalMessageTransfers != null) && (
+        <div style={{
+          position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)",
+          display: "flex", gap: 20, pointerEvents: "none", zIndex: 5,
+        }}>
+          {panel.totalMessageCopies != null && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }}>
+              <span style={{ color: "rgba(156,163,175,0.85)", fontSize: 9, letterSpacing: "0.05em", textTransform: "uppercase" }}>Total Message Copies</span>
+              <span style={{ color: "rgba(255,255,255,0.9)", fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                {panel.totalMessageCopies.toLocaleString()}
+              </span>
+            </div>
+          )}
+          {panel.totalMessageTransfers != null && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }}>
+              <span style={{ color: "rgba(156,163,175,0.85)", fontSize: 9, letterSpacing: "0.05em", textTransform: "uppercase" }}>Total Message Transfers</span>
+              <span style={{ color: "rgba(255,255,255,0.9)", fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                {panel.totalMessageTransfers.toLocaleString()}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
       {panel.clickedNode !== null && (
         <div style={{
           position: "fixed", left: panel.tooltipPos.x + 14, top: panel.tooltipPos.y - 10,
