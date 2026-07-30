@@ -77,7 +77,7 @@ export default function VisualizerPanel({
       {(panel.totalMessageCopies != null || panel.totalMessageTransfers != null) && (
         <div style={{
           position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)",
-          display: "flex", gap: 20, pointerEvents: "none", zIndex: 5,
+          display: "flex", gap: 16, alignItems: "center", pointerEvents: "none", zIndex: 5,
         }}>
           {panel.totalMessageCopies != null && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }}>

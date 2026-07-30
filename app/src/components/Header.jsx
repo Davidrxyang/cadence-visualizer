@@ -4,7 +4,7 @@ export default function Header({
   expNames, timeLabel, showAbsoluteTime, onShowAbsoluteTimeChange,
   nodeCount, frameIdx, frameCount,
   nodeSize, onNodeSizeChange, speed, onSpeedChange,
-  showLegend, onToggleLegend, onHome, splitMode,
+  showLegend, onToggleLegend, showMetrics, onToggleMetrics, onHome, splitMode,
 }) {
   return (
     <div style={{
@@ -44,6 +44,15 @@ export default function Header({
           onChange={e => onSpeedChange(Number(e.target.value))} style={{ width: 80 }} />
         <span style={{ minWidth: 28 }}>{speed}fps</span>
       </label>
+      <button onClick={onToggleMetrics} style={{
+        cursor: "pointer", fontSize: 12, padding: "4px 10px",
+        border: `0.5px solid ${showMetrics ? "rgba(59,130,246,0.55)" : "var(--color-border-secondary)"}`,
+        borderRadius: "var(--border-radius-md)",
+        background: showMetrics ? "rgba(59,130,246,0.15)" : "var(--color-background-secondary)",
+        color: showMetrics ? "#93c5fd" : "var(--color-text-secondary)",
+      }}>
+        Charts
+      </button>
       <Legend show={showLegend} onToggle={onToggleLegend} splitMode={splitMode} />
       <button onClick={onHome} style={{
         cursor: "pointer", fontSize: 12, padding: "4px 10px",

@@ -7,6 +7,7 @@ import Header from "./components/Header";
 import VisualizerPanel from "./components/VisualizerPanel";
 import CombinedSidebar from "./components/CombinedSidebar";
 import Timeline from "./components/Timeline";
+import MetricsOverlay from "./components/MetricsOverlay";
 
 // ── Experiment display names ──────────────────────────────────────────────────
 // Maps raw DB experiment_name → friendly display label.
@@ -90,6 +91,7 @@ export default function App() {
   const [nodeSize, setNodeSize] = useState(DEFAULT_NODE_RADIUS);
   const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
+  const [showMetrics, setShowMetrics] = useState(false);
 
   const onScrub = useCallback((idx) => { setPlaying(false); setFrameIdx(idx); }, []);
 
@@ -576,6 +578,8 @@ export default function App() {
             onSpeedChange={setSpeed}
             showLegend={showLegend}
             onToggleLegend={() => setShowLegend(v => !v)}
+            showMetrics={showMetrics}
+            onToggleMetrics={() => setShowMetrics(v => !v)}
             onHome={handleGoHome}
             splitMode={mode === "split"}
           />
@@ -657,6 +661,15 @@ export default function App() {
             dayMarkers={dayMarkers}
             tMin={activeData.meta.t_min}
             showAbsoluteTime={showAbsoluteTime}
+          />
+          <MetricsOverlay
+            visible={showMetrics}
+            onClose={() => setShowMetrics(false)}
+            data1={data}
+            data2={mode === "split" ? data2 : null}
+            frameIdx={frameIdx}
+            expName1={displayName(fileName)}
+            expName2={displayName(fileName2)}
           />
         </>
       )}
