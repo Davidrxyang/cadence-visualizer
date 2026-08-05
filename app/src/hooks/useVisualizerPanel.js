@@ -132,6 +132,32 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
     return null;
   }, [selectedMessage, data, frameIdxMap]);
 
+  const messageTransferCount = useMemo(() => {
+    if (!selectedMessage || !data) return 0;
+    const frameT = data.frames[frameIdx]?.t;
+    if (frameT == null) return 0;
+    const xfers = data.transfers[selectedMessage] ?? [];
+    let count = 0;
+    for (const x of xfers) {
+      if (x.t > frameT) break;
+      count++;
+    }
+    return count;
+  }, [selectedMessage, frameIdx, data]);
+
+  const messageDropCount = useMemo(() => {
+    if (!selectedMessage || !data) return 0;
+    const frameT = data.frames[frameIdx]?.t;
+    if (frameT == null) return 0;
+    const drops = data.drops?.[selectedMessage] ?? [];
+    let count = 0;
+    for (const d of drops) {
+      if (d.t > frameT) break;
+      count++;
+    }
+    return count;
+  }, [selectedMessage, frameIdx, data]);
+
   const deliveryMetrics = useMemo(() => {
     if (!selectedMessage || !data) return null;
     const dest = data.messageOrigins[selectedMessage]?.dest;
@@ -216,14 +242,14 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
   const nodeCount = data ? Object.keys(data.frames[frameIdx]?.nodes ?? {}).length : 0;
   const hasEncounters = !!(data?.encounters?.length);
   const msgInfo = selectedMessage ? data?.messageOrigins[selectedMessage] : null;
-  const delivered = !!(msgInfo && carriers.has(msgInfo.dest));
+  const delivered = deliveryFrameIdx !== null && frameIdx >= deliveryFrameIdx;
 
   return {
     encountersByNode, carriers, encounterTicks, currentEncounters,
     transferTicks, deliveryFrameIdx, deliveryMetrics,
     getMessagesForEncounter, openEncounterPopup, handlePopupMessageClick,
     nodeCount, hasEncounters, msgInfo, delivered,
-    totalMessageCopies, totalMessageTransfers,
+    totalMessageCopies, totalMessageTransfers, messageTransferCount, messageDropCount,
     clickedNode, setClickedNode, tooltipPos, setTooltipPos,
     encounterPopup, setEncounterPopup,
   };

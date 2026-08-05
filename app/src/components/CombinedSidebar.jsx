@@ -225,10 +225,12 @@ export default function CombinedSidebar({
                         </span>
                         <span style={{ fontSize: 11, color: p?.delivered ? expColor : "var(--color-text-secondary)" }}>
                           {p?.delivered ? "✓ Delivered" : "In transit"}
-                          {p?.carriers?.size != null && (
-                            <span style={{ color: "var(--color-text-secondary)", fontWeight: 400 }}> · {p.carriers.size} carriers</span>
-                          )}
                         </span>
+                        {p?.carriers?.size != null && (
+                          <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+                            {p.carriers.size} {p.carriers.size === 1 ? "copy" : "copies"} · {p.messageTransferCount ?? 0} transfers
+                          </span>
+                        )}
                         {p?.deliveryMetrics ? (
                           <>
                             <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
@@ -262,7 +264,7 @@ export default function CombinedSidebar({
                         {panel1.delivered ? "✓ Delivered" : "In transit"}
                       </span>
                       <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-                        {panel1.carriers.size} carriers
+                        {panel1.carriers.size} {panel1.carriers.size === 1 ? "copy" : "copies"} · {panel1.messageTransferCount ?? 0} transfers
                       </span>
                     </div>
                     {panel1.deliveryMetrics && (

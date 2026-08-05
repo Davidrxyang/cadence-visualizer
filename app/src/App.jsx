@@ -670,6 +670,7 @@ export default function App() {
             frameIdx={frameIdx}
             expName1={displayName(fileName)}
             expName2={displayName(fileName2)}
+            selectedMessage={selectedMessage}
           />
         </>
       )}

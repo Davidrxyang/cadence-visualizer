@@ -15,11 +15,10 @@ function niceMax(v) {
   return Math.ceil(v / mag) * mag;
 }
 
-function drawGraph(canvas, panelEl, { series, frameT, tMin, tMax, title, names }) {
+function drawGraph(canvas, panelEl, { series, frameT, tMin, tMax, title, names, stepLine = false }) {
   const W = (canvas.width = panelEl.offsetWidth);
   const H = (canvas.height = panelEl.offsetHeight);
   if (W === 0 || H === 0) return;
-
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, W, H);
 
@@ -83,21 +82,34 @@ function drawGraph(canvas, panelEl, { series, frameT, tMin, tMax, title, names }
   for (const s of series) {
     const visible = s.pts.filter((p) => p.t <= frameT);
     if (!visible.length) continue;
+
     ctx.strokeStyle = s.color;
     ctx.lineWidth = 1.5;
     ctx.lineJoin = "round";
     ctx.beginPath();
     ctx.moveTo(toX(visible[0].t), toY(visible[0].v));
-    for (let i = 1; i < visible.length; i++) ctx.lineTo(toX(visible[i].t), toY(visible[i].v));
+
+    if (stepLine) {
+      for (let i = 1; i < visible.length; i++) {
+        ctx.lineTo(toX(visible[i].t), toY(visible[i - 1].v)); // horizontal
+        ctx.lineTo(toX(visible[i].t), toY(visible[i].v));     // vertical
+      }
+      // extend flat line to current time
+      ctx.lineTo(toX(Math.min(frameT, tMax)), toY(visible[visible.length - 1].v));
+    } else {
+      for (let i = 1; i < visible.length; i++) ctx.lineTo(toX(visible[i].t), toY(visible[i].v));
+    }
     ctx.stroke();
+
+    // Dot at current end
     const last = visible[visible.length - 1];
     ctx.fillStyle = s.color;
     ctx.beginPath();
-    ctx.arc(toX(last.t), toY(last.v), 3, 0, Math.PI * 2);
+    ctx.arc(stepLine ? toX(Math.min(frameT, tMax)) : toX(last.t), toY(last.v), 3, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Legend
+  // Legend when two experiments
   if (series.length > 1 && names?.length) {
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
@@ -109,20 +121,63 @@ function drawGraph(canvas, panelEl, { series, frameT, tMin, tMax, title, names }
   }
 }
 
-export default function MetricsOverlay({ visible, onClose, data1, data2, frameIdx, expName1, expName2 }) {
+// Build per-message copies time series accounting for transfers and drops
+function buildMsgCopies(data, selectedMessage, color) {
+  const msgInfo = data.messageOrigins?.[selectedMessage];
+  if (!msgInfo) return null;
+  const xfers = data.transfers?.[selectedMessage] ?? [];
+  const drops = (data.drops?.[selectedMessage] ?? []);
+
+  const pts = [{ t: msgInfo.created, v: 1 }];
+  let xi = 0, di = 0, copies = 1;
+  while (xi < xfers.length || di < drops.length) {
+    const nx = xfers[xi], nd = drops[di];
+    if (nx && (!nd || nx.t <= nd.t)) {
+      copies++;
+      pts.push({ t: nx.t, v: copies });
+      xi++;
+    } else if (nd) {
+      copies = Math.max(0, copies - 1);
+      pts.push({ t: nd.t, v: copies });
+      di++;
+    }
+  }
+  return { pts, color };
+}
+
+function buildMsgTransfers(data, selectedMessage, color) {
+  const xfers = data.transfers?.[selectedMessage] ?? [];
+  let sum = 0;
+  return { pts: xfers.map((x) => ({ t: x.t, v: ++sum })), color };
+}
+
+export default function MetricsOverlay({
+  visible, onClose, data1, data2, frameIdx,
+  expName1, expName2, selectedMessage,
+}) {
   const [pos, setPos] = useState({ x: 80, y: 120 });
   const windowRef = useRef(null);
-  const leftPanelRef = useRef(null);
-  const rightPanelRef = useRef(null);
+  const drawRef = useRef(null);
+
+  // Aggregate panel refs
+  const leftAggRef = useRef(null);
+  const rightAggRef = useRef(null);
   const copiesRef = useRef(null);
   const xfersRef = useRef(null);
-  const drawRef = useRef(null);
+
+  // Per-message panel refs
+  const leftMsgRef = useRef(null);
+  const rightMsgRef = useRef(null);
+  const msgCopiesRef = useRef(null);
+  const msgXfersRef = useRef(null);
 
   const frameT = data1?.frames[frameIdx]?.t ?? null;
   const tMin = data1?.meta.t_min ?? 0;
   const tMax = data1?.meta.t_max ?? 1;
   const names = [expName1, expName2].filter(Boolean);
+  const hasMsg = !!selectedMessage;
 
+  // ── Aggregate series ──────────────────────────────────────────────────────
   const copiesSeries = useMemo(() => {
     if (!data1?.epochLoads) return [];
     const s1 = { pts: data1.epochLoads.map((e) => ({ t: e.t, v: e.load })), color: EXP_COLORS[0] };
@@ -141,28 +196,45 @@ export default function MetricsOverlay({ visible, onClose, data1, data2, frameId
     return [s1, build(data2.bandwidths, EXP_COLORS[1])];
   }, [data1, data2]);
 
-  // Set initial window size imperatively so CSS resize can manage it after
+  // ── Per-message series ────────────────────────────────────────────────────
+  const msgCopiesSeries = useMemo(() => {
+    if (!selectedMessage || !data1) return [];
+    const s1 = buildMsgCopies(data1, selectedMessage, EXP_COLORS[0]);
+    if (!data2) return s1 ? [s1] : [];
+    const s2 = buildMsgCopies(data2, selectedMessage, EXP_COLORS[1]);
+    return [s1, s2].filter(Boolean);
+  }, [selectedMessage, data1, data2]);
+
+  const msgXfersSeries = useMemo(() => {
+    if (!selectedMessage || !data1) return [];
+    const s1 = buildMsgTransfers(data1, selectedMessage, EXP_COLORS[0]);
+    if (!data2) return [s1];
+    return [s1, buildMsgTransfers(data2, selectedMessage, EXP_COLORS[1])];
+  }, [selectedMessage, data1, data2]);
+
+  // ── Window sizing ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!windowRef.current) return;
     windowRef.current.style.width = "640px";
-    windowRef.current.style.height = "220px";
-  }, [visible]); // runs each time the window is shown
+    windowRef.current.style.height = hasMsg ? "400px" : "220px";
+  }, [visible]); // initial size on show
 
-  // Drag handling
+  useEffect(() => {
+    if (!windowRef.current) return;
+    windowRef.current.style.height = hasMsg ? "400px" : "220px";
+  }, [hasMsg]); // resize when message selection changes
+
+  // ── Drag ──────────────────────────────────────────────────────────────────
   const handleDragStart = useCallback((e) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    const ox = e.clientX - pos.x;
-    const oy = e.clientY - pos.y;
+    const ox = e.clientX - pos.x, oy = e.clientY - pos.y;
     const onMove = (e) => {
       const el = windowRef.current;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const w = el ? el.offsetWidth : 0;
-      const h = el ? el.offsetHeight : 0;
+      const w = el?.offsetWidth ?? 0, h = el?.offsetHeight ?? 0;
       setPos({
-        x: Math.max(0, Math.min(e.clientX - ox, vw - w)),
-        y: Math.max(0, Math.min(e.clientY - oy, vh - h)),
+        x: Math.max(0, Math.min(e.clientX - ox, window.innerWidth - w)),
+        y: Math.max(0, Math.min(e.clientY - oy, window.innerHeight - h)),
       });
     };
     const onUp = () => {
@@ -173,65 +245,64 @@ export default function MetricsOverlay({ visible, onClose, data1, data2, frameId
     document.addEventListener("mouseup", onUp);
   }, [pos.x, pos.y]);
 
-  // Keep draw fn current (closure over latest data) without re-creating ResizeObserver
+  // ── Draw ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     drawRef.current = () => {
       if (!visible || frameT == null) return;
-      const args = { frameT, tMin, tMax, names };
-      if (copiesRef.current && leftPanelRef.current)
-        drawGraph(copiesRef.current, leftPanelRef.current, { ...args, series: copiesSeries, title: "Total Message Copies" });
-      if (xfersRef.current && rightPanelRef.current)
-        drawGraph(xfersRef.current, rightPanelRef.current, { ...args, series: xfersSeries, title: "Total Message Transfers" });
+      const base = { frameT, tMin, tMax, names };
+      if (copiesRef.current && leftAggRef.current)
+        drawGraph(copiesRef.current, leftAggRef.current, { ...base, series: copiesSeries, title: "Total Message Copies" });
+      if (xfersRef.current && rightAggRef.current)
+        drawGraph(xfersRef.current, rightAggRef.current, { ...base, series: xfersSeries, title: "Total Message Transfers" });
+      if (hasMsg) {
+        if (msgCopiesRef.current && leftMsgRef.current)
+          drawGraph(msgCopiesRef.current, leftMsgRef.current, { ...base, series: msgCopiesSeries, title: "Msg Copies", stepLine: true });
+        if (msgXfersRef.current && rightMsgRef.current)
+          drawGraph(msgXfersRef.current, rightMsgRef.current, { ...base, series: msgXfersSeries, title: "Msg Transfers", stepLine: true });
+      }
     };
   });
 
-  // Redraw when data or frame changes
-  useEffect(() => { drawRef.current?.(); }, [visible, copiesSeries, xfersSeries, frameT, tMin, tMax]);
+  useEffect(() => { drawRef.current?.(); }, [
+    visible, copiesSeries, xfersSeries, msgCopiesSeries, msgXfersSeries, frameT, tMin, tMax, hasMsg,
+  ]);
 
-  // ResizeObserver on the panel containers (NOT the canvases — avoids infinite loop)
+  // Observe the window div — its resize triggers panel reflow, then redraw
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !windowRef.current) return;
     const ro = new ResizeObserver(() => drawRef.current?.());
-    if (leftPanelRef.current) ro.observe(leftPanelRef.current);
-    if (rightPanelRef.current) ro.observe(rightPanelRef.current);
+    ro.observe(windowRef.current);
     return () => ro.disconnect();
   }, [visible]);
 
   if (!visible || !data1) return null;
 
+  const panelStyle = { flex: 1, overflow: "hidden", minWidth: 0, minHeight: 0 };
+  const canvasStyle = { display: "block" };
+  const dividerV = <div style={{ width: 1, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />;
+  const dividerH = <div style={{ height: 1, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />;
+
   return (
     <div
       ref={windowRef}
       style={{
-        position: "fixed",
-        left: pos.x,
-        top: pos.y,
-        zIndex: 1000,
+        position: "fixed", left: pos.x, top: pos.y, zIndex: 1000,
         background: "rgba(10,12,18,0.95)",
         border: "1px solid rgba(255,255,255,0.15)",
-        borderRadius: 6,
-        boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-        display: "flex",
-        flexDirection: "column",
-        resize: "both",
-        overflow: "hidden",
-        minWidth: 360,
-        minHeight: 150,
+        borderRadius: 6, boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+        display: "flex", flexDirection: "column",
+        resize: "both", overflow: "hidden",
+        minWidth: 360, minHeight: 150,
       }}
     >
-      {/* Title bar / drag handle */}
+      {/* Title bar */}
       <div
         onMouseDown={handleDragStart}
         style={{
-          padding: "5px 10px",
-          background: "rgba(255,255,255,0.05)",
+          padding: "5px 10px", background: "rgba(255,255,255,0.05)",
           borderBottom: "1px solid rgba(255,255,255,0.08)",
-          cursor: "grab",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          userSelect: "none",
-          flexShrink: 0,
+          cursor: "grab", display: "flex", alignItems: "center",
+          justifyContent: "space-between", userSelect: "none", flexShrink: 0,
         }}
       >
         <span style={{ fontSize: 11, color: "rgba(209,213,219,0.85)", fontWeight: 500, letterSpacing: "0.02em" }}>
@@ -247,22 +318,36 @@ export default function MetricsOverlay({ visible, onClose, data1, data2, frameId
               color: "rgba(156,163,175,0.6)", fontSize: 14, lineHeight: 1,
               padding: "0 2px", display: "flex", alignItems: "center",
             }}
-          >
-            ×
-          </button>
+          >×</button>
         </div>
       </div>
 
-      {/* Graphs — panel refs are on the divs, canvases follow their parent size */}
+      {/* Aggregate graphs */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
-        <div ref={leftPanelRef} style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
-          <canvas ref={copiesRef} style={{ display: "block" }} />
+        <div ref={leftAggRef} style={panelStyle}>
+          <canvas ref={copiesRef} style={canvasStyle} />
         </div>
-        <div style={{ width: 1, background: "rgba(255,255,255,0.08)", flexShrink: 0 }} />
-        <div ref={rightPanelRef} style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
-          <canvas ref={xfersRef} style={{ display: "block" }} />
+        {dividerV}
+        <div ref={rightAggRef} style={panelStyle}>
+          <canvas ref={xfersRef} style={canvasStyle} />
         </div>
       </div>
+
+      {/* Per-message graphs */}
+      {hasMsg && (
+        <>
+          {dividerH}
+          <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+            <div ref={leftMsgRef} style={panelStyle}>
+              <canvas ref={msgCopiesRef} style={canvasStyle} />
+            </div>
+            {dividerV}
+            <div ref={rightMsgRef} style={panelStyle}>
+              <canvas ref={msgXfersRef} style={canvasStyle} />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
