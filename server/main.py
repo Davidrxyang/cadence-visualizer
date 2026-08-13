@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 DB_PATH = str(Path(__file__).parent.parent / "db" / "japan.db")
 MESSAGES_PATH = Path(__file__).parent.parent / "messages" / "messages_japan_type_3.json"
@@ -277,3 +278,12 @@ def get_all_frames():
 @app.get("/api/experiment-data/{experiment_name:path}")
 def get_experiment_data(experiment_name: str):
     return load_experiment_data(experiment_name)
+
+
+for _dist in [
+    Path(__file__).parent.parent / "dist",
+    Path(__file__).parent.parent / "app" / "dist",
+]:
+    if _dist.exists():
+        app.mount("/", StaticFiles(directory=str(_dist), html=True), name="static")
+        break
