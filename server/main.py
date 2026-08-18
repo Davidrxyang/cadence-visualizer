@@ -155,11 +155,13 @@ def load_experiment_data(experiment_name: str) -> dict:
     for t, bw in cur.fetchall():
         bandwidths.append({"t": int(float(t)), "bw": float(bw)})
 
-    # buffer-eviction drops — nodes that once carried a message but later dropped it
+    # drops covering all reasons: buffer_overflow, ttl_expired, probabilistic_removal
+    # Deduplicate by (message_id, node_id) taking the earliest drop time, matching
+    # how transfers are deduplicated — a node can only drop a copy once.
     drops: dict[str, list] = {}
     cur.execute(
-        "SELECT message_id, node_id, drop_time FROM message_drop_dbs "
-        "WHERE experiment_name=? ORDER BY drop_time",
+        "SELECT message_id, node_id, MIN(drop_time) FROM message_drop_dbs "
+        "WHERE experiment_name=? GROUP BY message_id, node_id ORDER BY MIN(drop_time)",
         (experiment_name,),
     )
     for msg_id, node_id, drop_time in cur.fetchall():
@@ -218,6 +220,11 @@ async def lifespan(app: FastAPI):
     con.execute("CREATE INDEX IF NOT EXISTS idx_del_exp ON delivered_message_dbs(experiment_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_enc_exp ON encounters(experiment_name, dataset_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_drop_exp ON message_drop_dbs(experiment_name, drop_time)")
+    # Covering index for the GROUP BY dedup query (experiment_name → message_id, node_id, drop_time)
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_drop_exp_grp "
+        "ON message_drop_dbs(experiment_name, message_id, node_id, drop_time)"
+    )
     con.execute("CREATE INDEX IF NOT EXISTS idx_epoch_loads_exp ON epoch_loads(experiment_name, now)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_bandwidths_exp ON bandwidths(experiment_name, time)")
     # Covering index so the GROUP BY deduplication query reads from the index
