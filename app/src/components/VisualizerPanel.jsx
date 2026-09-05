@@ -4,7 +4,7 @@ import { renderFrame } from "../lib/canvasDraw";
 // Canvas-only panel. Sidebar lives in CombinedSidebar (App.jsx level).
 // Selection state is passed in via `selection`; per-canvas tooltip state lives in `panel`.
 export default function VisualizerPanel({
-  data, panel, frameIdx, nodeSize, selection, borderColor,
+  data, panel, frameIdx, nodeSize, selection, borderColor, districts,
 }) {
   const canvasRef = useRef(null);
 
@@ -23,6 +23,7 @@ export default function VisualizerPanel({
       selectedMessage: selection.selectedMessage,
       carriers: panel.carriers,
       hideCarriers: selection.hideCarriers,
+      districts,
     });
   }, [data, panel, frameIdx, nodeSize, selection]);
 

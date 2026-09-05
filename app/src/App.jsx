@@ -15,7 +15,6 @@ import MetricsOverlay from "./components/MetricsOverlay";
 const EXP_DISPLAY = {
   "japan - broadcast buffer=500 run=1":                          "Maximal Flooding",
   "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1": "Probabilistic Flooding",
-  "japan - randomwalk-v1 buffer=500 run=1":                     "Handoff",
   "japan - ppbr buffer=500 run=1":                              "PPBR",
   "japan - mirage p=0.55 k=2 buffer=500 run=1":                "MIRAGE - High Privacy",
   "japan - mirage p=0.6 k=2 buffer=500 run=1":                 "MIRAGE - Medium Privacy",
@@ -27,7 +26,6 @@ const EXP_GROUPS = [
     keys: [
       "japan - broadcast buffer=500 run=1",
       "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1",
-      "japan - randomwalk-v1 buffer=500 run=1",
     ],
   },
   {
@@ -92,6 +90,44 @@ export default function App() {
   const [showAbsoluteTime, setShowAbsoluteTime] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
   const [showMetrics, setShowMetrics] = useState(false);
+  const [showDistricts, setShowDistricts] = useState(false);
+  const [ppbrDistricts, setPpbrDistricts] = useState(null);
+  const [mirageDistricts, setMirageDistricts] = useState(null);
+  const [districtCardPos, setDistrictCardPos] = useState({ x: 10, y: null }); // null y = bottom-anchored default
+  const districtCardRef = useRef(null);
+
+  const handleDistrictCardDrag = useCallback((e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const el = districtCardRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const ox = e.clientX - rect.left, oy = e.clientY - rect.top;
+    const onMove = (e) => {
+      const w = el.offsetWidth, h = el.offsetHeight;
+      setDistrictCardPos({
+        x: Math.max(0, Math.min(e.clientX - ox, window.innerWidth - w)),
+        y: Math.max(0, Math.min(e.clientY - oy, window.innerHeight - h)),
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
+  // Lazy-load district data the first time the toggle is turned on for the relevant protocol
+  useEffect(() => {
+    if (!showDistricts) return;
+    if ((fileName?.includes("ppbr") || fileName2?.includes("ppbr")) && !ppbrDistricts) {
+      fetch("/districts/ppbr_districts_japan.json").then(r => r.json()).then(setPpbrDistricts);
+    }
+    if ((fileName?.includes("mirage") || fileName2?.includes("mirage")) && !mirageDistricts) {
+      fetch("/districts/mirage_districts_japan.json").then(r => r.json()).then(setMirageDistricts);
+    }
+  }, [showDistricts, fileName, fileName2, ppbrDistricts, mirageDistricts]);
 
   const onScrub = useCallback((idx) => { setPlaying(false); setFrameIdx(idx); }, []);
 
@@ -580,13 +616,36 @@ export default function App() {
             onToggleLegend={() => setShowLegend(v => !v)}
             showMetrics={showMetrics}
             onToggleMetrics={() => setShowMetrics(v => !v)}
+            showDistricts={showDistricts}
+            onToggleDistricts={() => { setShowDistricts(v => !v); setDistrictCardPos({ x: 10, y: null }); }}
             onHome={handleGoHome}
             splitMode={mode === "split"}
           />
 
           <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
             {/* Canvas area */}
-            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0, gap: mode === "split" ? 6 : 0 }}>
+            <div style={{ flex: 1, display: "flex", overflow: "hidden", minWidth: 0, gap: mode === "split" ? 6 : 0, position: "relative" }}>
+              {showDistricts && (
+                <div
+                  ref={districtCardRef}
+                  onMouseDown={handleDistrictCardDrag}
+                  style={{
+                    position: "fixed",
+                    left: districtCardPos.x,
+                    ...(districtCardPos.y === null ? { bottom: 10 } : { top: districtCardPos.y }),
+                    zIndex: 10,
+                    background: "rgba(10,12,18,0.88)",
+                    border: "1px solid rgba(251,191,36,0.3)",
+                    borderRadius: 6, padding: "7px 11px",
+                    fontSize: 11, color: "rgba(253,230,138,0.9)",
+                    maxWidth: 300, lineHeight: 1.5,
+                    cursor: "grab", userSelect: "none",
+                  }}
+                >
+                  <strong style={{ display: "block", marginBottom: 3, color: "rgba(253,230,138,1)" }}>Districts</strong>
+                  PPBR and MIRAGE generates districts differently by design. PPBR districts are generated as a geometric grid. MIRAGE districts are represented as centroids, where each marker represents the center of a district and each node "belongs" to the closest district.
+                </div>
+              )}
               <VisualizerPanel
                 data={data}
                 panel={panel1}
@@ -594,6 +653,7 @@ export default function App() {
                 nodeSize={nodeSize}
                 selection={selection}
                 borderColor={mode === "split" ? "#3b82f6" : undefined}
+                districts={showDistricts ? (fileName?.includes("ppbr") ? ppbrDistricts : fileName?.includes("mirage") ? mirageDistricts : null) : null}
               />
               {mode === "split" && (
                 <VisualizerPanel
@@ -603,6 +663,7 @@ export default function App() {
                   nodeSize={nodeSize}
                   selection={selection}
                   borderColor="#22c55e"
+                  districts={showDistricts ? (fileName2?.includes("ppbr") ? ppbrDistricts : fileName2?.includes("mirage") ? mirageDistricts : null) : null}
                 />
               )}
             </div>

@@ -40,6 +40,7 @@ export function renderFrame(ctx, W, H, opts) {
   const {
     data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode,
     showEncounters, encountersByNode, selectedMessage, carriers, hideCarriers,
+    districts,
   } = opts;
   const { meta, frames } = data;
 
@@ -100,6 +101,43 @@ export function renderFrame(ctx, W, H, opts) {
   // reset to canvas defaults so later passes (labels next to nodes) aren't affected
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
+
+  // ── District overlay (PPBR grid cells or MIRAGE centroids) ───────────────
+  if (districts?.length) {
+    const isPPBR = districts.length > 200; // PPBR has 17,976; MIRAGE has 100
+    if (isPPBR) {
+      // Each cell is 500 data-units wide/tall; draw as translucent filled rectangles
+      const cellW = (500 / (meta.x_max - meta.x_min)) * (W - PAD * 2);
+      const cellH = (500 / (meta.y_max - meta.y_min)) * (H - PAD * 2);
+      ctx.save();
+      ctx.beginPath();
+      for (const d of districts) {
+        const [sx, sy] = toScreen(d.x, d.y);
+        ctx.rect(sx - cellW / 2, sy - cellH / 2, cellW, cellH);
+      }
+      ctx.fillStyle = "rgba(251,191,36,0.07)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(251,191,36,0.22)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      // MIRAGE: draw each centroid as a small circle
+      const r = 5;
+      ctx.save();
+      for (const d of districts) {
+        const [sx, sy] = toScreen(d.x, d.y);
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(251,191,36,0.25)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(251,191,36,0.6)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
 
   const total = meta.node_count;
   const hasSelection = selectedNodes.size > 0;

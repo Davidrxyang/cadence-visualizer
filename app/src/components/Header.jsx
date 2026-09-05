@@ -4,7 +4,9 @@ export default function Header({
   expNames, timeLabel, showAbsoluteTime, onShowAbsoluteTimeChange,
   nodeCount, frameIdx, frameCount,
   nodeSize, onNodeSizeChange, speed, onSpeedChange,
-  showLegend, onToggleLegend, showMetrics, onToggleMetrics, onHome, splitMode,
+  showLegend, onToggleLegend, showMetrics, onToggleMetrics,
+  showDistricts, onToggleDistricts,
+  onHome, splitMode,
 }) {
   return (
     <div style={{
@@ -44,6 +46,15 @@ export default function Header({
           onChange={e => onSpeedChange(Number(e.target.value))} style={{ width: 80 }} />
         <span style={{ minWidth: 28 }}>{speed}fps</span>
       </label>
+      <button onClick={onToggleDistricts} style={{
+        cursor: "pointer", fontSize: 12, padding: "4px 10px",
+        border: `0.5px solid ${showDistricts ? "rgba(59,130,246,0.55)" : "var(--color-border-secondary)"}`,
+        borderRadius: "var(--border-radius-md)",
+        background: showDistricts ? "rgba(59,130,246,0.15)" : "var(--color-background-secondary)",
+        color: showDistricts ? "#93c5fd" : "var(--color-text-secondary)",
+      }}>
+        Districts
+      </button>
       <button onClick={onToggleMetrics} style={{
         cursor: "pointer", fontSize: 12, padding: "4px 10px",
         border: `0.5px solid ${showMetrics ? "rgba(59,130,246,0.55)" : "var(--color-border-secondary)"}`,
