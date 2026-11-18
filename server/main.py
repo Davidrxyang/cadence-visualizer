@@ -8,14 +8,16 @@ Run:
     uvicorn main:app --reload
 """
 
+import gzip
 import json
 import sqlite3
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 DB_PATH = str(Path(__file__).parent.parent / "db" / "japan.db")
@@ -25,7 +27,22 @@ DATASET = "japan"
 # In-memory caches — populated on first request, reused for the server's lifetime
 _frames_cache: list | None = None
 _meta_cache: dict | None = None
-_exp_cache: dict[str, dict] = {}
+_frames_json: bytes | None = None
+# Per-experiment responses, cached as already-serialized JSON bytes. Large payloads
+# are serialized once instead of on every request (FastAPI's default per-request
+# encoding of the broadcast payload alone took ~20s).
+_exp_json_cache: dict[str, bytes] = {}
+# gzip-compressed copies of the cached JSON bytes: ("frames",) or ("exp", name) → bytes
+_gzip_cache: dict[tuple, bytes] = {}
+
+
+def _to_json_bytes(content) -> bytes:
+    # Byte-for-byte the same rendering FastAPI/Starlette's JSONResponse applies to a
+    # returned dict (our payloads hold only dict/list/str/int/float/None, which
+    # FastAPI's jsonable_encoder passes through unchanged).
+    return json.dumps(
+        content, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":"),
+    ).encode("utf-8")
 
 # Canonical message registry — same for every experiment.
 # Keys are message IDs (strings); values match the messageOrigins shape expected by the frontend.
@@ -107,7 +124,8 @@ def _build_custody(msg_origins: dict, transfers: dict, drops: dict) -> dict[str,
     this resolves every event consistently for all experiments.
     """
     custody: dict[str, list] = {}
-    for mid in set(transfers) | set(drops) | set(msg_origins):
+    # deterministic key order (a set's iteration order changes between server runs)
+    for mid in dict.fromkeys([*msg_origins, *transfers, *drops]):
         # (t, kind, node, sender) — kind 0 = receive, 1 = drop; sorts receives first
         events = [(x["t"], 0, x["to"], x["from"]) for x in transfers.get(mid, ())]
         events += [(t, 1, node, None) for t, node in drops.get(mid, ())]
@@ -153,9 +171,7 @@ def _build_custody(msg_origins: dict, transfers: dict, drops: dict) -> dict[str,
 
 
 def load_experiment_data(experiment_name: str) -> dict:
-    if experiment_name in _exp_cache:
-        return _exp_cache[experiment_name]
-
+    """Build the per-experiment payload from the DB (uncached; see experiment_json)."""
     con = get_db()
     cur = con.cursor()
 
@@ -254,14 +270,70 @@ def load_experiment_data(experiment_name: str) -> dict:
     result = {
         "encounters": encounters,
         "messageOrigins": msg_origins,
-        "transfers": transfers,
+        # Compact wire format (the frontend expands it back to {id, t, from, to} objects
+        # in parse.js expandExperimentData): {msg_id: [t, from, to, t, from, to, ...]}
+        "transfersFlat": {
+            mid: [v for x in xfers for v in (x["t"], x["from"], x["to"])]
+            for mid, xfers in transfers.items()
+        },
         "deliveredPaths": delivered_paths,
         "custody": custody,
         "epochLoads": epoch_loads,
         "bandwidths": bandwidths,
     }
-    _exp_cache[experiment_name] = result
     return result
+
+
+def experiment_json(experiment_name: str) -> bytes:
+    """Serialized per-experiment payload, built and serialized once, then cached."""
+    cached = _exp_json_cache.get(experiment_name)
+    if cached is None:
+        cached = _to_json_bytes(load_experiment_data(experiment_name))
+        _exp_json_cache[experiment_name] = cached
+    return cached
+
+
+def frames_json() -> bytes:
+    global _frames_json
+    if _frames_json is None:
+        frames, _ = load_shared_data()
+        _frames_json = _to_json_bytes({"frames": frames})
+    return _frames_json
+
+
+def _accepts_gzip(request: Request) -> bool:
+    """True if the client's Accept-Encoding allows gzip (honours q=0 refusals)."""
+    q_by_coding: dict[str, float] = {}
+    for part in request.headers.get("accept-encoding", "").split(","):
+        coding, _, params = part.strip().partition(";")
+        coding = coding.strip().lower()
+        if not coding:
+            continue
+        q = 1.0
+        params = params.strip().lower()
+        if params.startswith("q="):
+            try:
+                q = float(params[2:])
+            except ValueError:
+                q = 0.0
+        q_by_coding[coding] = q
+    if "gzip" in q_by_coding:
+        return q_by_coding["gzip"] > 0
+    return q_by_coding.get("*", 0) > 0
+
+
+def _cached_json_response(key: tuple, body: bytes, request: Request) -> Response:
+    """Serve cached JSON bytes, gzip-compressed (once, then cached under `key`) if the
+    client accepts it. The decompressed bytes are exactly `body`."""
+    headers = {"Vary": "Accept-Encoding"}
+    if not _accepts_gzip(request):
+        return Response(content=body, media_type="application/json", headers=headers)
+    gz = _gzip_cache.get(key)
+    if gz is None:
+        gz = gzip.compress(body, compresslevel=6, mtime=0)
+        _gzip_cache[key] = gz
+    headers["Content-Encoding"] = "gzip"
+    return Response(content=gz, media_type="application/json", headers=headers)
 
 
 # ── app setup ─────────────────────────────────────────────────────────────────
@@ -332,14 +404,13 @@ def get_meta():
 
 
 @app.get("/api/frames")
-def get_all_frames():
-    frames, _ = load_shared_data()
-    return {"frames": frames}
+def get_all_frames(request: Request):
+    return _cached_json_response(("frames",), frames_json(), request)
 
 
 @app.get("/api/experiment-data/{experiment_name:path}")
-def get_experiment_data(experiment_name: str):
-    return load_experiment_data(experiment_name)
+def get_experiment_data(experiment_name: str, request: Request):
+    return _cached_json_response(("exp", experiment_name), experiment_json(experiment_name), request)
 
 
 for _dist in [

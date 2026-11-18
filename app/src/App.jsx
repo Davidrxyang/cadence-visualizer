@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { DEFAULT_NODE_RADIUS, MAX_SELECTED_NODES } from "./lib/constants";
 import { NODE_COLOR_PALETTE } from "./lib/colors";
-import { parseAPIFrames, formatDisplayTime } from "./lib/parse";
+import { parseAPIFrames, expandExperimentData, formatDisplayTime } from "./lib/parse";
 import { useVisualizerPanel } from "./hooks/useVisualizerPanel";
 import Header from "./components/Header";
 import VisualizerPanel from "./components/VisualizerPanel";
@@ -11,11 +11,15 @@ import MetricsOverlay from "./components/MetricsOverlay";
 
 // ── Experiment display names ──────────────────────────────────────────────────
 // Maps raw DB experiment_name → friendly display label.
-// Only experiments listed here are shown in the selection UI.
+// Only experiments listed in EXP_GROUPS are shown in the selection UI.
+//
+// Intentionally hidden: "japan - randomwalk-v1 buffer=500 run=1" is the Handoff
+// protocol (every transfer is paired with the sender deleting its copy; at most one
+// holder ever exists). It is not relevant to this tool's focus on the usability of
+// HumaNet messaging systems, so it is deliberately left out of EXP_GROUPS.
 const EXP_DISPLAY = {
   "japan - broadcast buffer=500 run=1":                          "Maximal Flooding",
   "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1": "Probabilistic Flooding",
-  "japan - randomwalk-v1 buffer=500 run=1":                      "Handoff",
   "japan - ppbr buffer=500 run=1":                              "PPBR",
   "japan - mirage p=0.55 k=2 buffer=500 run=1":                "MIRAGE - High Privacy",
   "japan - mirage p=0.6 k=2 buffer=500 run=1":                 "MIRAGE - Medium Privacy",
@@ -27,7 +31,6 @@ const EXP_GROUPS = [
     keys: [
       "japan - broadcast buffer=500 run=1",
       "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1",
-      "japan - randomwalk-v1 buffer=500 run=1",
     ],
   },
   {
@@ -327,7 +330,7 @@ export default function App() {
   const fetchExpData = async (name) => {
     const res = await fetch(`/api/experiment-data/${encodeURIComponent(name)}`);
     if (!res.ok) throw new Error(`Experiment data fetch failed: ${res.status}`);
-    return res.json();
+    return expandExperimentData(await res.json());
   };
 
   // ── Blocking load (called after experiments are selected) ─────────────────

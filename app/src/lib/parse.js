@@ -43,3 +43,25 @@ export function parseAPIFrames(rawFrames) {
     return { t: f.t, nodes };
   });
 }
+
+// The server sends transfers compactly as { msgId: [t, from, to, t, from, to, ...] }
+// (`transfersFlat`). Expand them back into the shape the rest of the app uses:
+// transfers: { msgId: [{ id, t, from, to }, ...] }. Everything else passes through.
+export function expandExperimentData(raw) {
+  const { transfersFlat, ...rest } = raw;
+  if (!transfersFlat || typeof transfersFlat !== "object") {
+    throw new Error("Experiment data is missing transfersFlat (frontend/server version mismatch?)");
+  }
+  const transfers = {};
+  for (const [id, flat] of Object.entries(transfersFlat)) {
+    if (!Array.isArray(flat) || flat.length % 3 !== 0) {
+      throw new Error(`Malformed transfers for message ${id}`);
+    }
+    const list = new Array(flat.length / 3);
+    for (let i = 0, j = 0; i < flat.length; i += 3, j++) {
+      list[j] = { id, t: flat[i], from: flat[i + 1], to: flat[i + 2] };
+    }
+    transfers[id] = list;
+  }
+  return { ...rest, transfers };
+}
