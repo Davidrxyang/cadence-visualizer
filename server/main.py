@@ -5,12 +5,18 @@ Serves node-position frames (shared across all experiments) and per-experiment
 data (encounters, message transfers, delivered paths) from the local SQLite DB.
 
 Run:
-    uvicorn main:app --reload
+    uvicorn main:app
+
+Startup preloads every experiment (~1 min) before accepting requests, so no user
+ever waits on a first-time build. For local development with auto-reload, skip it:
+    CADENCE_PRELOAD=0 uvicorn main:app --reload
 """
 
 import gzip
 import json
+import os
 import sqlite3
+import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -328,12 +334,31 @@ def _cached_json_response(key: tuple, body: bytes, request: Request) -> Response
     headers = {"Vary": "Accept-Encoding"}
     if not _accepts_gzip(request):
         return Response(content=body, media_type="application/json", headers=headers)
+    headers["Content-Encoding"] = "gzip"
+    return Response(content=_gzipped(key, body), media_type="application/json", headers=headers)
+
+
+def _gzipped(key: tuple, body: bytes) -> bytes:
     gz = _gzip_cache.get(key)
     if gz is None:
         gz = gzip.compress(body, compresslevel=6, mtime=0)
         _gzip_cache[key] = gz
-    headers["Content-Encoding"] = "gzip"
-    return Response(content=gz, media_type="application/json", headers=headers)
+    return gz
+
+
+def preload_all() -> None:
+    """Build, serialize and gzip every response up front, through the same functions the
+    routes use, so no user request ever waits on (or races) a first-time build."""
+    t_start = time.time()
+    _gzipped(("frames",), frames_json())
+    con = get_db()
+    names = [row[0] for row in con.execute("SELECT experiment_name FROM experiments ORDER BY experiment_name")]
+    con.close()
+    for name in names:
+        t0 = time.time()
+        _gzipped(("exp", name), experiment_json(name))
+        print(f"Preloaded {name} ({time.time() - t0:.1f}s)", flush=True)
+    print(f"Preload complete: {len(names)} experiments in {time.time() - t_start:.0f}s", flush=True)
 
 
 # ── app setup ─────────────────────────────────────────────────────────────────
@@ -368,6 +393,11 @@ async def lifespan(app: FastAPI):
     print(f"Message registry loaded: {len(_message_registry)} messages")
     # Pre-warm the frame cache so the first /api/frames request is instant
     load_shared_data()
+    # Preload every response before the server starts accepting requests (~1 min).
+    # Startup blocks on purpose: users never hit a cold or half-built cache.
+    # Set CADENCE_PRELOAD=0 to skip it during local development (e.g. with --reload).
+    if os.environ.get("CADENCE_PRELOAD", "1") != "0":
+        preload_all()
     yield
 
 
