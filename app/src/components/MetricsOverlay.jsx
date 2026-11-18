@@ -121,27 +121,18 @@ function drawGraph(canvas, panelEl, { series, frameT, tMin, tMax, title, names, 
   }
 }
 
-// Build per-message copies time series accounting for transfers and drops
+// Per-message copies time series from custody intervals [[node, start, end|null]]:
+// +1 when a node starts holding the message, -1 when it drops it.
 function buildMsgCopies(data, selectedMessage, color) {
-  const msgInfo = data.messageOrigins?.[selectedMessage];
-  if (!msgInfo) return null;
-  const xfers = data.transfers?.[selectedMessage] ?? [];
-  const drops = (data.drops?.[selectedMessage] ?? []);
-
-  const pts = [{ t: msgInfo.created, v: 1 }];
-  let xi = 0, di = 0, copies = 1;
-  while (xi < xfers.length || di < drops.length) {
-    const nx = xfers[xi], nd = drops[di];
-    if (nx && (!nd || nx.t <= nd.t)) {
-      copies++;
-      pts.push({ t: nx.t, v: copies });
-      xi++;
-    } else if (nd) {
-      copies = Math.max(0, copies - 1);
-      pts.push({ t: nd.t, v: copies });
-      di++;
-    }
+  const intervals = data.custody?.[selectedMessage];
+  if (!intervals?.length) return null;
+  const delta = new Map();
+  for (const [, start, end] of intervals) {
+    delta.set(start, (delta.get(start) ?? 0) + 1);
+    if (end !== null) delta.set(end, (delta.get(end) ?? 0) - 1);
   }
+  let copies = 0;
+  const pts = [...delta.keys()].sort((a, b) => a - b).map(t => ({ t, v: (copies += delta.get(t)) }));
   return { pts, color };
 }
 

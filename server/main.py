@@ -94,6 +94,64 @@ def load_shared_data() -> tuple[list, dict]:
 
 # ── per-experiment data ────────────────────────────────────────────────────────
 
+def _build_custody(msg_origins: dict, transfers: dict, drops: dict) -> dict[str, list]:
+    """Replay transfer and drop events into custody intervals per message.
+
+    Returns {msg_id: [[node, start, end], ...]} where the node held the message
+    during [start, end); end is None if it still held it when the simulation ended.
+
+    The simulator timestamps events at its time step (60 s), so many events share a
+    timestamp and their true order within a step is not recorded. Within a tied
+    group we apply events causally: a receive is applied once its sender holds the
+    message and the receiver doesn't, a drop once the node holds it. On the japan DB
+    this resolves every event consistently for all experiments.
+    """
+    custody: dict[str, list] = {}
+    for mid in set(transfers) | set(drops) | set(msg_origins):
+        # (t, kind, node, sender) — kind 0 = receive, 1 = drop; sorts receives first
+        events = [(x["t"], 0, x["to"], x["from"]) for x in transfers.get(mid, ())]
+        events += [(t, 1, node, None) for t, node in drops.get(mid, ())]
+        events.sort(key=lambda e: (e[0], e[1]))  # stable: keeps rowid order within ties
+
+        held: dict[int, int] = {}  # node → custody start time
+        intervals: list = []
+        origin = msg_origins.get(mid)
+        if origin is not None:
+            held[origin["origin"]] = origin["created"]
+
+        def apply(ev):
+            t, kind, node, _ = ev
+            if kind == 0:
+                held.setdefault(node, t)
+            elif node in held:
+                intervals.append([node, held.pop(node), t])
+
+        def valid(ev):
+            _, kind, node, sender = ev
+            return (sender in held and node not in held) if kind == 0 else node in held
+
+        i = 0
+        while i < len(events):
+            j = i
+            while j < len(events) and events[j][0] == events[i][0]:
+                j += 1
+            if j - i == 1:  # fast path: no tie to resolve
+                apply(events[i])
+                i = j
+                continue
+            pending = events[i:j]
+            while pending:
+                k = next((k for k, ev in enumerate(pending) if valid(ev)), 0)
+                apply(pending.pop(k))
+            i = j
+
+        intervals.extend([node, start, None] for node, start in held.items())
+        if intervals:
+            intervals.sort(key=lambda iv: iv[1])
+            custody[mid] = intervals
+    return custody
+
+
 def load_experiment_data(experiment_name: str) -> dict:
     if experiment_name in _exp_cache:
         return _exp_cache[experiment_name]
@@ -120,15 +178,12 @@ def load_experiment_data(experiment_name: str) -> dict:
     # transfer/delivery outcomes differ.
     msg_origins: dict[str, dict] = dict(_message_registry)
 
-    # message transfers — deduplicate to earliest transfer per (msg_id, receiver) in SQL
-    # sender_node in a GROUP BY is SQLite's arbitrary pick from the group; for our
-    # visualisation (who transferred to whom at what time) this is close enough.
+    # message transfers — every transfer event, not deduplicated: a node can drop a
+    # message and later receive it again (common in flooding/handoff protocols).
     transfers: dict[str, list] = {}
     cur.execute(
-        "SELECT message_id, sender_node, reciever_node, MIN(transfer_time) "
-        "FROM message_dbs WHERE experiment_name=? "
-        "GROUP BY message_id, reciever_node "
-        "ORDER BY MIN(transfer_time)",
+        "SELECT message_id, sender_node, reciever_node, transfer_time "
+        "FROM message_dbs WHERE experiment_name=? ORDER BY transfer_time, rowid",
         (experiment_name,),
     )
     for msg_id, sndr, recv, t_xfer in cur.fetchall():
@@ -156,17 +211,17 @@ def load_experiment_data(experiment_name: str) -> dict:
         bandwidths.append({"t": int(float(t)), "bw": float(bw)})
 
     # drops covering all reasons: buffer_overflow, ttl_expired, probabilistic_removal
-    # Deduplicate by (message_id, node_id) taking the earliest drop time, matching
-    # how transfers are deduplicated — a node can only drop a copy once.
+    # (all events, not deduplicated — a node can hold and drop the same message repeatedly)
     drops: dict[str, list] = {}
     cur.execute(
-        "SELECT message_id, node_id, MIN(drop_time) FROM message_drop_dbs "
-        "WHERE experiment_name=? GROUP BY message_id, node_id ORDER BY MIN(drop_time)",
+        "SELECT message_id, node_id, drop_time FROM message_drop_dbs "
+        "WHERE experiment_name=? ORDER BY drop_time, rowid",
         (experiment_name,),
     )
     for msg_id, node_id, drop_time in cur.fetchall():
-        mid = str(msg_id)
-        drops.setdefault(mid, []).append({"node": int(node_id), "t": int(float(drop_time))})
+        drops.setdefault(str(msg_id), []).append((int(float(drop_time)), int(node_id)))
+
+    custody = _build_custody(msg_origins, transfers, drops)
 
     # delivered message paths
     delivered_paths: dict[str, list] = {}
@@ -201,7 +256,7 @@ def load_experiment_data(experiment_name: str) -> dict:
         "messageOrigins": msg_origins,
         "transfers": transfers,
         "deliveredPaths": delivered_paths,
-        "drops": drops,
+        "custody": custody,
         "epochLoads": epoch_loads,
         "bandwidths": bandwidths,
     }

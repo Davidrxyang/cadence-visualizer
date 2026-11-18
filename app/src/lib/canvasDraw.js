@@ -1,5 +1,6 @@
 import { CARRIER_RESERVED_COLOR } from "./constants";
 import { hueForNode } from "./colors";
+import { frameStart, frameCutoff } from "./frames";
 
 // Picks a "nice" round step size (1/2/5 x a power of 10) for an axis spanning
 // `range` units, aiming for roughly `targetTicks` gridlines.
@@ -35,15 +36,9 @@ export function drawTriangle(ctx, cx, cy, r, fillColor, strokeColor, lineWidth) 
   ctx.stroke();
 }
 
-// Renders one frame of the visualization onto the given 2D canvas context.
-export function renderFrame(ctx, W, H, opts) {
-  const {
-    data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode,
-    showEncounters, encountersByNode, selectedMessage, carriers, hideCarriers,
-    districts,
-  } = opts;
-  const { meta, frames } = data;
-
+// Canvas layout shared by rendering and click hit-testing, so both always agree
+// on where a node is drawn.
+export function getLayout(ctx, W, H, meta) {
   // grid — coordinates are in meters (confirmed against the YJMob100K source
   // dataset: 500m grid cells over a 100km x 100km area). Ticks land on clean
   // round km values rather than dividing the range into 10 equal (fractional) parts.
@@ -64,6 +59,19 @@ export function renderFrame(ctx, W, H, opts) {
     const sy = H - (((y - meta.y_min) / (meta.y_max - meta.y_min)) * (H - PAD * 2) + PAD);
     return [sx, sy];
   };
+
+  return { xMinKm, xMaxKm, yMinKm, yMaxKm, xTicksKm, yTicksKm, PAD, toScreen };
+}
+
+// Renders one frame of the visualization onto the given 2D canvas context.
+export function renderFrame(ctx, W, H, opts) {
+  const {
+    data, frameIdx, selectedNodes, nodeColors, nodeSize, filterMode,
+    showEncounters, encountersByNode, selectedMessage, carriers, hideCarriers,
+    districts,
+  } = opts;
+  const { meta, frames } = data;
+  const { xMinKm, xMaxKm, yMinKm, yMaxKm, xTicksKm, yTicksKm, PAD, toScreen } = getLayout(ctx, W, H, meta);
 
   ctx.clearRect(0, 0, W, H);
 
@@ -218,11 +226,11 @@ export function renderFrame(ctx, W, H, opts) {
 
   // pass 4: encounter markers (amber)
   if (showEncounters && hasSelection) {
-    const frameT = frames[frameIdx].t;
     const drawn = new Set();
     for (const nodeId of selectedNodes) {
       for (const enc of (encountersByNode[nodeId] ?? [])) {
-        if (frameT < enc.t || frameT >= enc.t + enc.dur) continue;
+        // i0/i1: nearest-frame range of the encounter (see useVisualizerPanel)
+        if (frameIdx < enc.i0 || frameIdx > enc.i1) continue;
         const key = `${enc.t}-${enc.n1}-${enc.n2}`;
         if (drawn.has(key)) continue;
         drawn.add(key);
@@ -248,12 +256,11 @@ export function renderFrame(ctx, W, H, opts) {
 
   // pass 5: message transfer markers (blue)
   if (hasMessage && !hideCarriers) {
-    const frameT = frames[frameIdx].t;
-    const { bucket } = meta;
+    // draw transfers whose nearest frame is this one
+    const lo = frameStart(frames, frameIdx), hi = frameCutoff(frames, frameIdx);
     for (const xfer of (data.transfers[selectedMessage] ?? [])) {
-      const xferBucket = Math.floor(xfer.t / bucket) * bucket;
-      if (xferBucket < frameT) continue;
-      if (xferBucket > frameT) break;
+      if (xfer.t < lo) continue;
+      if (xfer.t >= hi) break;
       const posA = frame.nodes[xfer.from];
       const posB = frame.nodes[xfer.to];
       if (!posA || !posB) continue;

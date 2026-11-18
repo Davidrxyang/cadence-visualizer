@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
+import { frameCutoff, nearestFrameIdx, carriersAt } from "../lib/frames";
 
 // Per-canvas derived state. Selection is owned externally (App.jsx) and shared
 // between both canvases in split mode. This hook computes only the values that
@@ -14,63 +15,54 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [encounterPopup, setEncounterPopup] = useState(null);
 
-  const frameIdxMap = useMemo(() => {
-    if (!data) return new Map();
-    return new Map(data.frames.map((f, i) => [f.t, i]));
-  }, [data]);
+  // Events up to (but excluding) this time are "visible" at the current frame —
+  // each event is shown from its nearest frame onward (see lib/frames.js).
+  const cutoff = data?.frames?.length ? frameCutoff(data.frames, frameIdx) : null;
 
+  // Each encounter is annotated with the frame range [i0, i1] it spans after
+  // snapping its start and end to the nearest frames, so even a 60s encounter
+  // shows up on exactly one frame.
   const encountersByNode = useMemo(() => {
     if (!data?.encounters?.length) return {};
     const map = {};
-    for (const enc of data.encounters) {
+    for (const raw of data.encounters) {
+      const enc = {
+        ...raw,
+        i0: nearestFrameIdx(data.frames, raw.t),
+        i1: nearestFrameIdx(data.frames, raw.t + raw.dur),
+      };
       (map[enc.n1] ??= []).push(enc);
       (map[enc.n2] ??= []).push(enc);
     }
     return map;
   }, [data]);
 
+  // Carriers come from server-computed custody intervals, which replay every
+  // transfer and drop in order — so a node that drops a message and later
+  // re-receives it is shown correctly.
   const carriers = useMemo(() => {
-    if (!selectedMessage || !data) return new Set();
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return new Set();
-    const origin = data.messageOrigins[selectedMessage]?.origin;
-    const result = new Set(origin != null ? [origin] : []);
-    for (const xfer of (data.transfers[selectedMessage] ?? [])) {
-      if (xfer.t > frameT) break;
-      result.add(xfer.to);
-    }
-    for (const drop of (data.drops?.[selectedMessage] ?? [])) {
-      if (drop.t > frameT) break;
-      result.delete(drop.node);
-    }
-    return result;
-  }, [selectedMessage, frameIdx, data]);
+    if (!selectedMessage || cutoff == null) return new Set();
+    return carriersAt(data.custody?.[selectedMessage], cutoff);
+  }, [selectedMessage, cutoff, data]);
 
   const encounterTicks = useMemo(() => {
     if (!data?.encounters?.length || !selectedNodes?.size) return new Set();
-    const { bucket } = data.meta;
     const ticks = new Set();
     for (const nodeId of selectedNodes) {
       for (const enc of (encountersByNode[nodeId] ?? [])) {
-        const tStart = Math.floor(enc.t / bucket) * bucket;
-        for (let t = tStart; t < enc.t + enc.dur; t += bucket) {
-          const idx = frameIdxMap.get(t);
-          if (idx !== undefined) ticks.add(idx);
-        }
+        for (let i = enc.i0; i <= enc.i1; i++) ticks.add(i);
       }
     }
     return ticks;
-  }, [data, selectedNodes, encountersByNode, frameIdxMap]);
+  }, [data, selectedNodes, encountersByNode]);
 
   const currentEncounters = useMemo(() => {
     if (!data?.encounters?.length || !selectedNodes?.size) return [];
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return [];
     const seen = new Set();
     const result = [];
     for (const nodeId of selectedNodes) {
       for (const enc of (encountersByNode[nodeId] ?? [])) {
-        if (frameT < enc.t || frameT >= enc.t + enc.dur) continue;
+        if (frameIdx < enc.i0 || frameIdx > enc.i1) continue;
         const key = `${enc.t}-${enc.n1}-${enc.n2}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -99,64 +91,30 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
 
   const transferTicks = useMemo(() => {
     if (!selectedMessage || !data?.transfers[selectedMessage]) return new Set();
-    const { bucket } = data.meta;
     const ticks = new Set();
     for (const xfer of data.transfers[selectedMessage]) {
-      const bucketed = Math.floor(xfer.t / bucket) * bucket;
-      const idx = frameIdxMap.get(bucketed);
-      if (idx !== undefined) ticks.add(idx);
+      ticks.add(nearestFrameIdx(data.frames, xfer.t));
     }
     return ticks;
-  }, [selectedMessage, data, frameIdxMap]);
+  }, [selectedMessage, data]);
 
   const deliveryFrameIdx = useMemo(() => {
     if (!selectedMessage || !data) return null;
     const dest = data.messageOrigins[selectedMessage]?.dest;
     if (dest == null) return null;
-    const { bucket } = data.meta;
-    for (const xfer of (data.transfers[selectedMessage] ?? [])) {
-      if (xfer.to === dest) {
-        const bucketed = Math.floor(xfer.t / bucket) * bucket;
-        const exact = frameIdxMap.get(bucketed);
-        if (exact !== undefined) return exact;
-        const frames = data.frames;
-        let lo = 0, hi = frames.length - 1, best = 0;
-        while (lo <= hi) {
-          const mid = (lo + hi) >> 1;
-          if (frames[mid].t <= bucketed) { best = mid; lo = mid + 1; }
-          else hi = mid - 1;
-        }
-        return best;
-      }
-    }
-    return null;
-  }, [selectedMessage, data, frameIdxMap]);
+    const deliverXfer = (data.transfers[selectedMessage] ?? []).find(x => x.to === dest);
+    return deliverXfer ? nearestFrameIdx(data.frames, deliverXfer.t) : null;
+  }, [selectedMessage, data]);
 
   const messageTransferCount = useMemo(() => {
-    if (!selectedMessage || !data) return 0;
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return 0;
-    const xfers = data.transfers[selectedMessage] ?? [];
+    if (!selectedMessage || cutoff == null) return 0;
     let count = 0;
-    for (const x of xfers) {
-      if (x.t > frameT) break;
+    for (const x of (data.transfers[selectedMessage] ?? [])) {
+      if (x.t >= cutoff) break;
       count++;
     }
     return count;
-  }, [selectedMessage, frameIdx, data]);
-
-  const messageDropCount = useMemo(() => {
-    if (!selectedMessage || !data) return 0;
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return 0;
-    const drops = data.drops?.[selectedMessage] ?? [];
-    let count = 0;
-    for (const d of drops) {
-      if (d.t > frameT) break;
-      count++;
-    }
-    return count;
-  }, [selectedMessage, frameIdx, data]);
+  }, [selectedMessage, cutoff, data]);
 
   const deliveryMetrics = useMemo(() => {
     if (!selectedMessage || !data) return null;
@@ -186,47 +144,32 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
 
   const totalMessageCopies = useMemo(() => {
     const loads = data?.epochLoads;
-    if (!loads?.length) return null;
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return null;
+    if (!loads?.length || cutoff == null) return null;
     let lo = 0, hi = loads.length - 1, result = 0;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (loads[mid].t <= frameT) { result = loads[mid].load; lo = mid + 1; }
+      if (loads[mid].t < cutoff) { result = loads[mid].load; lo = mid + 1; }
       else hi = mid - 1;
     }
     return result;
-  }, [data, frameIdx]);
+  }, [data, cutoff]);
 
   const totalMessageTransfers = useMemo(() => {
-    if (!bwPrefixSums) return 0;
-    const frameT = data.frames[frameIdx]?.t;
-    if (frameT == null) return 0;
+    if (!bwPrefixSums || cutoff == null) return 0;
     const { ts, sums } = bwPrefixSums;
     let lo = 0, hi = ts.length - 1, idx = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (ts[mid] <= frameT) { idx = mid; lo = mid + 1; }
+      if (ts[mid] < cutoff) { idx = mid; lo = mid + 1; }
       else hi = mid - 1;
     }
     return idx >= 0 ? Math.round(sums[idx]) : 0;
-  }, [bwPrefixSums, frameIdx, data]);
+  }, [bwPrefixSums, cutoff]);
 
   const findFrameIdxForTime = useCallback((t) => {
     if (!data) return null;
-    const { bucket } = data.meta;
-    const bucketed = Math.floor(t / bucket) * bucket;
-    const exact = frameIdxMap.get(bucketed);
-    if (exact !== undefined) return exact;
-    const frames = data.frames;
-    let lo = 0, hi = frames.length - 1, best = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (frames[mid].t <= bucketed) { best = mid; lo = mid + 1; }
-      else hi = mid - 1;
-    }
-    return best;
-  }, [data, frameIdxMap]);
+    return nearestFrameIdx(data.frames, t);
+  }, [data]);
 
   const openEncounterPopup = useCallback((enc) => {
     setEncounterPopup(enc);
@@ -249,7 +192,7 @@ export function useVisualizerPanel(data, frameIdx, onScrub, selection, onMessage
     transferTicks, deliveryFrameIdx, deliveryMetrics,
     getMessagesForEncounter, openEncounterPopup, handlePopupMessageClick,
     nodeCount, hasEncounters, msgInfo, delivered,
-    totalMessageCopies, totalMessageTransfers, messageTransferCount, messageDropCount,
+    totalMessageCopies, totalMessageTransfers, messageTransferCount,
     clickedNode, setClickedNode, tooltipPos, setTooltipPos,
     encounterPopup, setEncounterPopup,
   };

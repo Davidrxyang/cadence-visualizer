@@ -15,6 +15,7 @@ import MetricsOverlay from "./components/MetricsOverlay";
 const EXP_DISPLAY = {
   "japan - broadcast buffer=500 run=1":                          "Maximal Flooding",
   "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1": "Probabilistic Flooding",
+  "japan - randomwalk-v1 buffer=500 run=1":                      "Handoff",
   "japan - ppbr buffer=500 run=1":                              "PPBR",
   "japan - mirage p=0.55 k=2 buffer=500 run=1":                "MIRAGE - High Privacy",
   "japan - mirage p=0.6 k=2 buffer=500 run=1":                 "MIRAGE - Medium Privacy",
@@ -26,6 +27,7 @@ const EXP_GROUPS = [
     keys: [
       "japan - broadcast buffer=500 run=1",
       "japan - randomwalk-v1-random p_t=0.5 p_d=0.8 buffer=500 run=1",
+      "japan - randomwalk-v1 buffer=500 run=1",
     ],
   },
   {

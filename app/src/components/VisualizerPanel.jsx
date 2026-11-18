@@ -1,5 +1,5 @@
 import { useRef, useCallback, useEffect } from "react";
-import { renderFrame } from "../lib/canvasDraw";
+import { renderFrame, getLayout } from "../lib/canvasDraw";
 
 // Canvas-only panel. Sidebar lives in CombinedSidebar (App.jsx level).
 // Selection state is passed in via `selection`; per-canvas tooltip state lives in `panel`.
@@ -50,12 +50,8 @@ export default function VisualizerPanel({
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     const { meta, frames } = data;
-    const W = canvas.width, H = canvas.height;
-    const PAD = 20;
-    const toScreen = (x, y) => [
-      ((x - meta.x_min) / (meta.x_max - meta.x_min)) * (W - PAD * 2) + PAD,
-      H - (((y - meta.y_min) / (meta.y_max - meta.y_min)) * (H - PAD * 2) + PAD),
-    ];
+    // same layout as renderFrame, so hit-testing matches where nodes are drawn
+    const { toScreen } = getLayout(canvas.getContext("2d"), canvas.width, canvas.height, meta);
     const frame = frames[frameIdx];
     let closest = null, closestDist = 10;
     for (const [idStr, [x, y]] of Object.entries(frame.nodes)) {
