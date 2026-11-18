@@ -76,7 +76,7 @@ export default function Legend({ show, onToggle, splitMode }) {
                 label="Encounter between two selected nodes"
               />
               <LegendRow
-                preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(251,191,36,0.9)" }} />}
+                preview={<div style={{ width: 2, height: 6, background: "rgba(251,191,36,0.9)" }} />}
                 label="Encounter tick on timeline"
               />
             </div>
@@ -111,7 +111,7 @@ export default function Legend({ show, onToggle, splitMode }) {
               {!splitMode ? (
                 <>
                   <LegendRow
-                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(59,130,246,0.9)" }} />}
+                    preview={<div style={{ width: 2, height: 6, background: "rgba(59,130,246,0.9)" }} />}
                     label="Transfer tick on timeline"
                   />
                   <LegendRow
@@ -122,7 +122,7 @@ export default function Legend({ show, onToggle, splitMode }) {
               ) : (
                 <>
                   <LegendRow
-                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(59,130,246,0.9)" }} />}
+                    preview={<div style={{ width: 2, height: 6, background: "rgba(59,130,246,0.9)" }} />}
                     label="Exp 1 transfer tick on timeline (blue)"
                   />
                   <LegendRow
@@ -130,7 +130,7 @@ export default function Legend({ show, onToggle, splitMode }) {
                     label="Exp 1 delivery marker (blue)"
                   />
                   <LegendRow
-                    preview={<div style={{ width: 6, height: 6, borderRadius: 1, background: "rgba(34,197,94,0.9)" }} />}
+                    preview={<div style={{ width: 2, height: 6, background: "rgba(34,197,94,0.9)" }} />}
                     label="Exp 2 transfer tick on timeline (green)"
                   />
                   <LegendRow

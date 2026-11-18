@@ -1,5 +1,14 @@
 import { formatDisplayTime } from "../lib/parse";
 
+// Encounter / transfer ticks: a thin 2px visible bar so neighbouring ticks stay
+// distinct, with transparent 2px side borders keeping a 6px-wide click target.
+const TICK_STYLE = {
+  boxSizing: "content-box", // index.css sets border-box globally; borders must add to the width
+  top: 1, width: 2, height: 6, transform: "translateX(-50%)",
+  borderLeft: "2px solid transparent", borderRight: "2px solid transparent",
+  backgroundClip: "content-box",
+};
+
 export default function Timeline({
   playing, onTogglePlay,
   frames, frameIdx, onScrub, tMin, showAbsoluteTime,
@@ -52,7 +61,7 @@ export default function Timeline({
                 style={{
                   position: "absolute", cursor: "pointer",
                   left: pct(idx),
-                  top: 1, width: 6, height: 6, borderRadius: 1, transform: "translateX(-50%)",
+                  ...TICK_STYLE,
                   background: idx === frameIdx ? "rgba(251,191,36,1)" : "rgba(251,191,36,0.65)",
                 }}
               />
@@ -67,7 +76,7 @@ export default function Timeline({
                 style={{
                   position: "absolute", cursor: "pointer",
                   left: pct(idx),
-                  top: 1, width: 6, height: 6, borderRadius: 1, transform: "translateX(-50%)",
+                  ...TICK_STYLE,
                   background: idx === frameIdx
                     ? `rgba(${color.join(",")},1)`
                     : `rgba(${color.join(",")},0.65)`,

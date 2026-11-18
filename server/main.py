@@ -14,6 +14,7 @@ ever waits on a first-time build. For local development with auto-reload, skip i
 
 import gzip
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -29,6 +30,9 @@ from fastapi.staticfiles import StaticFiles
 DB_PATH = str(Path(__file__).parent.parent / "db" / "japan.db")
 MESSAGES_PATH = Path(__file__).parent.parent / "messages" / "messages_japan_type_3.json"
 DATASET = "japan"
+
+# uvicorn's logger, so our startup progress lines match its "INFO:" output
+logger = logging.getLogger("uvicorn.error")
 
 # In-memory caches — populated on first request, reused for the server's lifetime
 _frames_cache: list | None = None
@@ -176,8 +180,17 @@ def _build_custody(msg_origins: dict, transfers: dict, drops: dict) -> dict[str,
     return custody
 
 
-def load_experiment_data(experiment_name: str) -> dict:
-    """Build the per-experiment payload from the DB (uncached; see experiment_json)."""
+def load_experiment_data(experiment_name: str, log=None) -> dict:
+    """Build the per-experiment payload from the DB (uncached; see experiment_json).
+    `log`, if given, is called with a progress line after each stage."""
+    log = log or (lambda _msg: None)
+    t_stage = time.time()
+
+    def stage_done(msg: str) -> None:
+        nonlocal t_stage
+        log(f"{msg} ({time.time() - t_stage:.1f}s)")
+        t_stage = time.time()
+
     con = get_db()
     cur = con.cursor()
 
@@ -192,6 +205,7 @@ def load_experiment_data(experiment_name: str) -> dict:
          "x": int(r[3]), "y": int(r[4]), "dur": int(r[5])}
         for r in cur.fetchall()
     ]
+    stage_done(f"encounters: {len(encounters):,}")
 
     # Message origins come from the canonical raw messages file, not from message_dbs.
     # message_dbs only records transfers that actually happened, so messages that were
@@ -213,6 +227,7 @@ def load_experiment_data(experiment_name: str) -> dict:
         transfers.setdefault(mid, []).append(
             {"id": mid, "t": int(float(t_xfer)), "from": int(sndr), "to": int(recv)}
         )
+    stage_done(f"transfers: {sum(map(len, transfers.values())):,} across {len(transfers):,} messages")
 
     # total message copies per epoch
     epoch_loads: list = []
@@ -231,6 +246,7 @@ def load_experiment_data(experiment_name: str) -> dict:
     )
     for t, bw in cur.fetchall():
         bandwidths.append({"t": int(float(t)), "bw": float(bw)})
+    stage_done(f"network load series: {len(epoch_loads):,} epochs, {len(bandwidths):,} bandwidth records")
 
     # drops covering all reasons: buffer_overflow, ttl_expired, probabilistic_removal
     # (all events, not deduplicated — a node can hold and drop the same message repeatedly)
@@ -242,8 +258,10 @@ def load_experiment_data(experiment_name: str) -> dict:
     )
     for msg_id, node_id, drop_time in cur.fetchall():
         drops.setdefault(str(msg_id), []).append((int(float(drop_time)), int(node_id)))
+    stage_done(f"drops: {sum(map(len, drops.values())):,}")
 
     custody = _build_custody(msg_origins, transfers, drops)
+    stage_done(f"custody replay: {sum(map(len, custody.values())):,} holding intervals")
 
     # delivered message paths
     delivered_paths: dict[str, list] = {}
@@ -271,6 +289,7 @@ def load_experiment_data(experiment_name: str) -> dict:
                 nodes_in_path.append(node_id)
         if nodes_in_path:
             delivered_paths[msg_id] = nodes_in_path
+    stage_done(f"delivered paths: {len(delivered_paths):,} of {len(msg_origins):,} messages")
 
     con.close()
     result = {
@@ -290,11 +309,15 @@ def load_experiment_data(experiment_name: str) -> dict:
     return result
 
 
-def experiment_json(experiment_name: str) -> bytes:
+def experiment_json(experiment_name: str, log=None) -> bytes:
     """Serialized per-experiment payload, built and serialized once, then cached."""
     cached = _exp_json_cache.get(experiment_name)
     if cached is None:
-        cached = _to_json_bytes(load_experiment_data(experiment_name))
+        data = load_experiment_data(experiment_name, log)
+        t0 = time.time()
+        cached = _to_json_bytes(data)
+        if log:
+            log(f"serialized: {len(cached) / 1e6:.1f} MB JSON ({time.time() - t0:.1f}s)")
         _exp_json_cache[experiment_name] = cached
     return cached
 
@@ -350,23 +373,56 @@ def preload_all() -> None:
     """Build, serialize and gzip every response up front, through the same functions the
     routes use, so no user request ever waits on (or races) a first-time build."""
     t_start = time.time()
-    _gzipped(("frames",), frames_json())
     con = get_db()
     names = [row[0] for row in con.execute("SELECT experiment_name FROM experiments ORDER BY experiment_name")]
     con.close()
-    for name in names:
+    logger.info(f"[preload] Preloading frames + {len(names)} experiments before accepting requests "
+                f"(set CADENCE_PRELOAD=0 to skip)")
+
+    t0 = time.time()
+    body = frames_json()
+    gz = _gzipped(("frames",), body)
+    logger.info(f"[preload] frames: {len(body) / 1e6:.1f} MB JSON → {len(gz) / 1e6:.1f} MB gzip "
+                f"({time.time() - t0:.1f}s)")
+
+    for i, name in enumerate(names, 1):
+        tag = f"[preload {i}/{len(names)}]"
+        logger.info(f"{tag} {name}")
         t0 = time.time()
-        _gzipped(("exp", name), experiment_json(name))
-        print(f"Preloaded {name} ({time.time() - t0:.1f}s)", flush=True)
-    print(f"Preload complete: {len(names)} experiments in {time.time() - t_start:.0f}s", flush=True)
+        body = experiment_json(name, log=lambda msg: logger.info(f"{tag}   {msg}"))
+        t_gz = time.time()
+        gz = _gzipped(("exp", name), body)
+        logger.info(f"{tag}   gzip: {len(gz) / 1e6:.1f} MB ({time.time() - t_gz:.1f}s)")
+        logger.info(f"{tag} done in {time.time() - t0:.1f}s · total elapsed {time.time() - t_start:.0f}s · "
+                    f"{len(names) - i} remaining")
+
+    cached_mb = (sum(map(len, _exp_json_cache.values())) + sum(map(len, _gzip_cache.values()))
+                 + len(_frames_json or b"")) / 1e6
+    logger.info(f"[preload] Complete: {len(names)} experiments in {time.time() - t_start:.0f}s · "
+                f"{cached_mb:.0f} MB of responses cached{_rss_note()}")
+
+
+def _rss_note() -> str:
+    """' · process memory N MB' on Linux, else ''."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return f" · process memory {int(line.split()[1]) // 1024} MB"
+    except OSError:
+        pass
+    return ""
 
 
 # ── app setup ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    t_start = time.time()
+    logger.info(f"[startup] Database: {DB_PATH}")
     # Add indexes on startup so experiment-data queries are fast.
     # These are no-ops if the indexes already exist.
+    t0 = time.time()
     con = get_db()
     con.execute("CREATE INDEX IF NOT EXISTS idx_msg_exp ON message_dbs(experiment_name)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_del_exp ON delivered_message_dbs(experiment_name)")
@@ -387,17 +443,26 @@ async def lifespan(app: FastAPI):
     )
     con.commit()
     con.close()
+    logger.info(f"[startup] Indexes ready ({time.time() - t0:.1f}s)")
     # Load canonical message list from the raw JSON file
+    t0 = time.time()
     global _message_registry
     _message_registry = _load_message_registry()
-    print(f"Message registry loaded: {len(_message_registry)} messages")
+    logger.info(f"[startup] Message registry: {len(_message_registry):,} messages from "
+                f"{MESSAGES_PATH.name} ({time.time() - t0:.1f}s)")
     # Pre-warm the frame cache so the first /api/frames request is instant
-    load_shared_data()
+    t0 = time.time()
+    frames, meta = load_shared_data()
+    logger.info(f"[startup] Node positions: {len(frames):,} frames, {meta['node_count']:,} nodes, "
+                f"{meta['bucket']}s apart ({time.time() - t0:.1f}s)")
     # Preload every response before the server starts accepting requests (~1 min).
     # Startup blocks on purpose: users never hit a cold or half-built cache.
     # Set CADENCE_PRELOAD=0 to skip it during local development (e.g. with --reload).
     if os.environ.get("CADENCE_PRELOAD", "1") != "0":
         preload_all()
+    else:
+        logger.info("[startup] CADENCE_PRELOAD=0: skipping preload; experiments build on first request")
+    logger.info(f"[startup] Ready after {time.time() - t_start:.0f}s — now accepting requests")
     yield
 
 
